@@ -15,11 +15,18 @@ public:
 private:
   std::shared_ptr<OS::OSDesktop> m_desktop;
 
+  // Game state variables for status bar
+  int m_day;
+  int m_budget;
+  int m_publicTrust;
+  std::string m_cityStatus;
+
   // Setup helpers (called from Init)
   void SetupDesktopIcons();
   void SetupStartMenu();
   void SetupContextMenu();
   void SetupSystemTray();
+  void DrawStatusBar();
 
   // Window content builders
   static void DrawTerminalContent(Rectangle area);
@@ -27,4 +34,8 @@ private:
   static void DrawFileManagerContent(Rectangle area);
   static void DrawNotesContent(Rectangle area);
   static void DrawAboutContent(Rectangle area);
+  static void DrawThreatCenterContent(Rectangle area);
+  static void DrawCommsContent(Rectangle area);
+  static void DrawMitigationHub(Rectangle area);
+  static void DrawAnalysisCenter(Rectangle area);
 };
