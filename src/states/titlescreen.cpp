@@ -9,6 +9,12 @@ void TitleScreen::Init() {
   m_titlecard = Fumbo::Assets::LoadTexture("assets/images/titlecard.png");
   m_background = Fumbo::Assets::LoadTexture("assets/images/background.png");
 
+  // Load Audio (Sound Effects Only)
+  auto &am = Fumbo::Engine::Instance().GetAudioManager();
+  am.LoadAudio("click", "assets/music/click.mp3", Fumbo::Audio::AudioType::SOUND);
+  am.LoadAudio("notification", "assets/music/notification.mp3", Fumbo::Audio::AudioType::SOUND);
+  am.LoadAudio("warning", "assets/music/warning.mp3", Fumbo::Audio::AudioType::SOUND);
+
   // Center buttons horizontally at x = 540, width = 200, height = 40.
   // Y positions: 400, 455, 510, 565
   m_btnstart = Fumbo::UI::Button({540, 400, 200, 40});
@@ -33,14 +39,16 @@ void TitleScreen::Cleanup() {
 
 void TitleScreen::Update() {
   if (m_btnstart.IsPressed()) {
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
     Fumbo::Instance().ChangeState(std::make_shared<DemoDesktop>());
   }
 
   if (m_btnsettings.IsPressed()) {
-    // No-op or notification
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
   }
 
   if (m_btnexit.IsPressed()) {
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
     Fumbo::Instance().Quit();
   }
 }

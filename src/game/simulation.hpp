@@ -101,6 +101,12 @@ private:
      */
     void GenerateComms(GameManager& gameManager);
 
+public:
+    static int GetActionBudgetCost(ActionID id, DisasterType type);
+    static int GetActionRescueTeamCost(ActionID id, DisasterType type);
+
+private:
+
     // Per-turn counters populated while processing actions. These are reset
     // at the start of each ExecuteTurn and used by EvaluateOutcomes.
     int m_teamsDeployedThisTurn = 0;

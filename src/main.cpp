@@ -4,7 +4,7 @@
 #include <memory>
 
 int main() {
-  Fumbo::Engine::Instance().Init(1280, 720, "Fumbo OS", 60);
+  Fumbo::Engine::Instance().Init(1280, 720, "Sentinel", 60);
   Fumbo::Assets::AddAssetPack("data.fpk");
 
   OS::LoadGlobalAssets();

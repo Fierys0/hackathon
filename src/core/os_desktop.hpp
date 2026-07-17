@@ -71,6 +71,7 @@ public:
                       std::function<void()> onDoubleClick);
 
   void ClearDesktopIcons();
+  const std::vector<DesktopIcon> &GetDesktopIcons() const;
   // Open a new window with content callback and return its ID
   int OpenWindow(const std::string &title, Rectangle bounds,
                  WindowContentCallback content, Texture2D icon = {0});

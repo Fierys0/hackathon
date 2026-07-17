@@ -1,8 +1,9 @@
 #include "demoDesktop.hpp"
+#include "../core/globals.hpp"
 #include "../game/game_manager.hpp"
 #include "../game/simulation.hpp"
-#include "../core/globals.hpp"
 #include "fumbo.hpp"
+#include "titlescreen.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -13,6 +14,7 @@ static int s_mitigationTab = 0;         // 0=Flood, 1=Wildfire, 2=Volcano
 static bool s_queuedActions[3][5] = {}; // [tab][action] queued state
 static int s_hoveredMitAction = -1;     // Currently hovered action index
 static bool s_showEndShiftConfirm = false;
+static bool s_campaignVictoryVisible = false;
 // IGameState interface: delegates to OSDesktop
 
 void DemoDesktop::Init() {
@@ -22,7 +24,7 @@ void DemoDesktop::Init() {
   // Initialize status bar game state
   m_day = 1;
   m_budget = 50000;
-  m_publicTrust = 85;
+  m_publicTrust = 50;
   m_cityStatus = "ALERT";
   m_shiftNumber = 1;
   m_currentTimeWindowIndex = 0;
@@ -41,6 +43,7 @@ void DemoDesktop::Init() {
   m_mitigationIconTex =
       Fumbo::Assets::LoadTexture("assets/icons/mitigation.png");
   m_bookmarkIconTex = Fumbo::Assets::LoadTexture("assets/icons/bookmark.png");
+  m_notesIconTex = Fumbo::Assets::LoadTexture("assets/icons/notes.png");
 
   // Setup Notepad-like textbox
   m_notesWindowId = -1;
@@ -53,6 +56,24 @@ void DemoDesktop::Init() {
   m_notesTextbox.SetText(
       "- Buy groceries\n- Finish the OS simulation\n- Submit hackathon "
       "project\n- Learn more C++\n- Sleep more :)");
+
+  // Setup Field Radio chatbot app
+  m_radioWindowId = -1;
+  m_radioInputTextbox =
+      Fumbo::UI::Textbox({0, 0, 100, 100}, OS::GlobalFont, 14);
+  m_radioInputTextbox.SetMultiline(false);
+  m_radioInputTextbox.SetBackgroundColor(WHITE);
+  m_radioInputTextbox.SetTextColor(BLACK);
+  m_radioInputTextbox.SetOutlineColor({128, 128, 128, 255}, {10, 36, 106, 255});
+  m_radioInputTextbox.SetPadding({6.0f, 6.0f});
+  m_radioInputTextbox.SetText("");
+  m_radioPending = false;
+  m_radioChatHistory.clear();
+  m_radioChatHistory.push_back(
+      {"RADIO", "Field Radio initialized. VHF channel open."});
+  m_radioChatHistory.push_back(
+      {"Hendro", "Hendro here. Sector A flood monitoring. Let me know if you "
+                 "need telemetry reports or structural gate advice."});
 
   // Apply classic window styles
   OS::WindowStyle winStyle;
@@ -98,9 +119,24 @@ void DemoDesktop::Init() {
                     "Fumbo OS is ready. Double-click an icon to start.");
 
   m_desktop->SetWallpaper(m_wallpaper);
+
+  // Auto-open tutorial manual on first shift
+  if (m_shiftNumber == 1) {
+    OpenTutorialWindow();
+  }
+
+  // Load and play background music safely (guarded in AudioManager)
+  auto &am = Fumbo::Engine::Instance().GetAudioManager();
+  am.LoadAudio("backgroundmsc", "assets/music/backgroundmsc.mp3",
+               Fumbo::Audio::AudioType::MUSIC);
+  if (!am.IsMusicPlaying(0)) {
+    am.PlayMusic("backgroundmsc", 0, true);
+  }
 }
 
-std::string DemoDesktop::GetCurrentTimeLabel() const { return m_currentTimeLabel; }
+std::string DemoDesktop::GetCurrentTimeLabel() const {
+  return m_currentTimeLabel;
+}
 
 void DemoDesktop::AdvanceTimeWindow() {
   if (m_currentTimeWindowIndex < 3) {
@@ -132,6 +168,13 @@ void DemoDesktop::Cleanup() {
 }
 
 void DemoDesktop::Update() {
+  m_gameManager.Update();
+
+  if (m_shiftSummaryVisible || m_shiftBriefingVisible ||
+      s_campaignVictoryVisible) {
+    return;
+  }
+
   if (m_desktop) {
     m_desktop->Update();
 
@@ -140,6 +183,46 @@ void DemoDesktop::Update() {
     if (notesWin && notesWin->IsVisible()) {
       m_notesTextbox.SetFocused(notesWin->IsFocused());
       m_notesTextbox.Update();
+    }
+
+    // Update radio input textbox if Field Radio window is open and visible
+    auto *radioWin = m_desktop->GetWindowManager().GetWindow(m_radioWindowId);
+    if (radioWin && radioWin->IsVisible()) {
+      m_radioInputTextbox.SetFocused(radioWin->IsFocused());
+      m_radioInputTextbox.Update();
+    }
+  }
+
+  if (m_radioPending) {
+    auto status = m_radioFuture.wait_for(std::chrono::seconds(0));
+    if (status == std::future_status::ready) {
+      m_radioPending = false;
+      Game::AIChatResult res = m_radioFuture.get();
+
+      std::string contact = "Hendro";
+      if (m_shiftNumber == 2 || m_shiftNumber == 5)
+        contact = "Budi";
+      else if (m_shiftNumber == 3 || m_shiftNumber == 6 || m_shiftNumber == 7)
+        contact = "Dr. Surono";
+
+      if (res.success) {
+        m_radioChatHistory.push_back({contact, res.message});
+      } else {
+        // Fallback offline responses if API key or connection failed
+        std::string fallback =
+            "VHF static... Signal weak. Standby for operational instructions.";
+        if (contact == "Hendro") {
+          fallback = "Hendro here. We are monitoring overflow rates. Focus on "
+                     "warning evacuation zones.";
+        } else if (contact == "Budi") {
+          fallback = "Budi here. Evacuating villages in path of winds. "
+                     "Maintain staging lines!";
+        } else {
+          fallback = "Dr. Surono. Seismic tremors accelerating. Evacuation "
+                     "routes must remain clear.";
+        }
+        m_radioChatHistory.push_back({contact, fallback});
+      }
     }
   }
 }
@@ -154,11 +237,418 @@ void DemoDesktop::DrawDirty() {
 
   if (m_desktop)
     m_desktop->DrawDirty();
+
+  Font font = OS::GlobalFont;
+  Vector2 scale = Fumbo::Utils::GetUIScale();
+  Vector2 offset = Fumbo::Utils::GetUIOffset();
+  Vector2 rawMouse = GetMousePosition();
+  Vector2 mouse = {(rawMouse.x - offset.x) / scale.x,
+                   (rawMouse.y - offset.y) / scale.y};
+
+  // Dynamic guide highlight overlays for the first shift tutorial
+  if (m_shiftNumber == 1 && !m_shiftSummaryVisible && !m_shiftBriefingVisible &&
+      !s_campaignVictoryVisible) {
+    float pulse = (sinf(GetTime() * 6.0f) + 1.0f) * 0.5f;
+    Color glowColor = {255, 215, 0, (unsigned char)(100 + pulse * 155)};
+
+    bool threatOpen = false;
+    bool commsOpen = false;
+    bool mitigationOpen = false;
+    bool tutorialOpen = false;
+
+    auto openIds = m_desktop->GetWindowManager().GetOpenWindowIds();
+    for (int id : openIds) {
+      auto *win = m_desktop->GetWindowManager().GetWindow(id);
+      if (win && win->IsVisible()) {
+        if (win->GetTitle() == "Threat Center")
+          threatOpen = true;
+        if (win->GetTitle() == "Comms")
+          commsOpen = true;
+        if (win->GetTitle() == "Mitigation Hub")
+          mitigationOpen = true;
+        if (win->GetTitle() == "How to Play - Sentinel")
+          tutorialOpen = true;
+      }
+    }
+
+    const auto &icons = m_desktop->GetDesktopIcons();
+    for (const auto &icon : icons) {
+      bool highlight = false;
+      if (icon.label == "How to Play" && !tutorialOpen && !threatOpen &&
+          !commsOpen && !mitigationOpen) {
+        highlight = true;
+      } else if (icon.label == "Threat Center" && !threatOpen && !commsOpen &&
+                 !mitigationOpen) {
+        highlight = true;
+      } else if (icon.label == "Comms" && threatOpen && !commsOpen &&
+                 !mitigationOpen) {
+        highlight = true;
+      } else if (icon.label == "Mitigation Hub" && (threatOpen || commsOpen) &&
+                 !mitigationOpen) {
+        highlight = true;
+      }
+
+      if (highlight) {
+        Rectangle r = {icon.position.x - 6.0f, icon.position.y - 6.0f, 60.0f,
+                       75.0f};
+        Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(r, 0.1f, 4, 2.0f,
+                                                      glowColor);
+      }
+    }
+  }
+
+  if (m_shiftSummaryVisible) {
+    // Cover the entire screen with a classic Windows 95 teal background
+    Fumbo::Graphic2D::DrawRectangleRec({0.0f, 0.0f, 1280.0f, 720.0f},
+                                       {0, 128, 128, 255});
+
+    // Centered classic 3D dialog box
+    Rectangle summaryRect = {340.0f, 110.0f, 600.0f, 500.0f};
+    Fumbo::Graphic2D::DrawRectangleRec(summaryRect, {192, 192, 192, 255});
+
+    // Windows 95 3D raised border lines
+    Fumbo::Graphic2D::DrawLineEx(
+        {summaryRect.x, summaryRect.y},
+        {summaryRect.x + summaryRect.width, summaryRect.y}, 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {summaryRect.x, summaryRect.y},
+        {summaryRect.x, summaryRect.y + summaryRect.height}, 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {summaryRect.x + summaryRect.width - 1.5f, summaryRect.y},
+        {summaryRect.x + summaryRect.width - 1.5f,
+         summaryRect.y + summaryRect.height},
+        1.5f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx(
+        {summaryRect.x, summaryRect.y + summaryRect.height - 1.5f},
+        {summaryRect.x + summaryRect.width,
+         summaryRect.y + summaryRect.height - 1.5f},
+        1.5f, {128, 128, 128, 255});
+
+    // Dialog Header bar (Blue)
+    Rectangle headerRect = {summaryRect.x + 4.0f, summaryRect.y + 4.0f,
+                            summaryRect.width - 8.0f, 22.0f};
+    Fumbo::Graphic2D::DrawRectangleRec(headerRect, {0, 0, 128, 255});
+    Fumbo::Graphic2D::DrawText("SHIFT SUMMARY REPORT",
+                               {headerRect.x + 8.0f, headerRect.y + 5.0f}, font,
+                               11, WHITE);
+
+    // Render Stats
+    Game::GameState &gsFinal = m_gameManager.GetGameState();
+    std::string budgetRemainingStr = "$" + std::to_string(gsFinal.budget);
+    std::string publicTrustStr = std::to_string(gsFinal.publicTrust) + "%";
+
+    float ratingVal = gsFinal.publicTrust / 20.0f;
+    char ratingBuf[32];
+    std::snprintf(ratingBuf, sizeof(ratingBuf), "%.1f/5", ratingVal);
+    std::string ratingStr(ratingBuf);
+
+    std::string stats[][2] = {
+        {"Lives Saved", std::to_string(gsFinal.peopleSaved)},
+        {"Casualties", std::to_string(gsFinal.casualties)},
+        {"Infrastructure Damage",
+         std::to_string(gsFinal.infrastructureDamage) + "%"},
+        {"Budget Remaining", budgetRemainingStr},
+        {"Public Trust", publicTrustStr},
+        {"Overall Rating", ratingStr}};
+
+    float statY = summaryRect.y + 50.0f;
+    for (int i = 0; i < 6; i++) {
+      Fumbo::Graphic2D::DrawText(stats[i][0],
+                                 {summaryRect.x + 30.0f, statY + i * 28.0f},
+                                 font, 12, BLACK);
+      Fumbo::Graphic2D::DrawText(
+          stats[i][1],
+          {summaryRect.x + summaryRect.width - 150.0f, statY + i * 28.0f}, font,
+          12, {0, 100, 0, 255});
+    }
+
+    std::string line1Text = "Operations completed successfully for the day.";
+    std::string line2Text = "The city is safe. Good job, officer.";
+    if (gsFinal.casualties > 0) {
+      line1Text =
+          std::to_string(gsFinal.peopleSaved) + " lives were saved, but " +
+          std::to_string(gsFinal.casualties) + " citizens were lost today.";
+      line2Text =
+          "The city will remember who acted fast, and who hesitated too long.";
+    }
+
+    Fumbo::Graphic2D::DrawText(
+        line1Text,
+        {summaryRect.x + 30.0f, summaryRect.y + summaryRect.height - 110.0f},
+        font, 10, {100, 0, 0, 255});
+    Fumbo::Graphic2D::DrawText(
+        line2Text,
+        {summaryRect.x + 30.0f, summaryRect.y + summaryRect.height - 90.0f},
+        font, 10, {200, 0, 0, 255});
+
+    // Continue Button (3D raised)
+    Rectangle closeBtn = {summaryRect.x + summaryRect.width - 140.0f,
+                          summaryRect.y + summaryRect.height - 45.0f, 110.0f,
+                          30.0f};
+    bool closeHovered = CheckCollisionPointRec(mouse, closeBtn);
+
+    Fumbo::Graphic2D::DrawRectangleRec(closeBtn, {192, 192, 192, 255});
+    Fumbo::Graphic2D::DrawLineEx({closeBtn.x, closeBtn.y},
+                                 {closeBtn.x + closeBtn.width, closeBtn.y},
+                                 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({closeBtn.x, closeBtn.y},
+                                 {closeBtn.x, closeBtn.y + closeBtn.height},
+                                 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {closeBtn.x + closeBtn.width - 1.5f, closeBtn.y},
+        {closeBtn.x + closeBtn.width - 1.5f, closeBtn.y + closeBtn.height},
+        1.5f, BLACK);
+    Fumbo::Graphic2D::DrawLineEx(
+        {closeBtn.x, closeBtn.y + closeBtn.height - 1.5f},
+        {closeBtn.x + closeBtn.width, closeBtn.y + closeBtn.height - 1.5f},
+        1.5f, BLACK);
+
+    Fumbo::Graphic2D::DrawText(
+        "CONTINUE", {closeBtn.x + 28.0f, closeBtn.y + 10.0f}, font, 10, BLACK);
+
+    if (closeHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+      m_shiftSummaryVisible = false;
+
+      if (m_shiftNumber >= 7) {
+        s_campaignVictoryVisible = true;
+      } else {
+        m_shiftBriefingVisible = true;
+        m_shiftNumber++;
+        m_currentTimeWindowIndex = 0;
+        m_currentTimeLabel = "08:00";
+        m_cityStatus = "ALERT";
+
+        auto &gs = m_gameManager.GetGameState();
+        gs.currentShift = m_shiftNumber;
+        gs.ResetForNewShift();
+        m_gameManager.TriggerAIUpdate();
+
+        m_radioChatHistory.clear();
+        m_radioChatHistory.push_back(
+            {"RADIO",
+             "VHF Channel re-initialized. Establishing connection..."});
+        if (m_shiftNumber == 1 || m_shiftNumber == 4) {
+          m_radioChatHistory.push_back(
+              {"Hendro",
+               "Hendro here. Sector A flood monitoring. Let me know if you "
+               "need telemetry reports or structural gate advice."});
+        } else if (m_shiftNumber == 2 || m_shiftNumber == 5) {
+          m_radioChatHistory.push_back(
+              {"Budi",
+               "Captain Budi, Sector C fire command. High dry winds reported. "
+               "Send user queries for fire containment strategy."});
+        } else {
+          m_radioChatHistory.push_back(
+              {"Dr. Surono",
+               "Dr. Surono here. Monitoring Mt. Fumbo volcanic gas emissions "
+               "and tremor frequency. Ready for hazard query."});
+        }
+        m_radioPending = false;
+        m_radioInputTextbox.SetText("");
+
+        for (int t = 0; t < 3; t++)
+          for (int a = 0; a < 5; a++)
+            s_queuedActions[t][a] = false;
+      }
+    }
+  } else if (m_shiftBriefingVisible) {
+    // Full screen briefing cover
+    Fumbo::Graphic2D::DrawRectangleRec({0.0f, 0.0f, 1280.0f, 720.0f},
+                                       {0, 128, 128, 255});
+
+    Rectangle briefingRect = {340.0f, 110.0f, 600.0f, 500.0f};
+    Fumbo::Graphic2D::DrawRectangleRec(briefingRect, {192, 192, 192, 255});
+
+    Fumbo::Graphic2D::DrawLineEx(
+        {briefingRect.x, briefingRect.y},
+        {briefingRect.x + briefingRect.width, briefingRect.y}, 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {briefingRect.x, briefingRect.y},
+        {briefingRect.x, briefingRect.y + briefingRect.height}, 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {briefingRect.x + briefingRect.width - 1.5f, briefingRect.y},
+        {briefingRect.x + briefingRect.width - 1.5f,
+         briefingRect.y + briefingRect.height},
+        1.5f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx(
+        {briefingRect.x, briefingRect.y + briefingRect.height - 1.5f},
+        {briefingRect.x + briefingRect.width,
+         briefingRect.y + briefingRect.height - 1.5f},
+        1.5f, {128, 128, 128, 255});
+
+    Rectangle headerRect = {briefingRect.x + 4.0f, briefingRect.y + 4.0f,
+                            briefingRect.width - 8.0f, 22.0f};
+    Fumbo::Graphic2D::DrawRectangleRec(headerRect, {0, 0, 128, 255});
+    Fumbo::Graphic2D::DrawText("OPERATIONAL BRIEFING",
+                               {headerRect.x + 8.0f, headerRect.y + 5.0f}, font,
+                               11, WHITE);
+
+    Fumbo::Graphic2D::DrawText("Next shift readiness directions:",
+                               {briefingRect.x + 30.0f, briefingRect.y + 50.0f},
+                               font, 11, BLACK);
+
+    std::string b1 = "- Recheck sensor calibration before dispatch.";
+    std::string b2 = "- Prepare shelter and communications routes.";
+    std::string b3 = "- Maintain public trust with clear updates.";
+    if (m_shiftNumber == 1 || m_shiftNumber == 4) {
+      b1 = "- Monitor river levels and highlands precipitation.";
+      b2 = "- Prepare sandbag barricades along Sector A.";
+      b3 = "- Issue early warning alerts to panic prevention.";
+    } else if (m_shiftNumber == 2 || m_shiftNumber == 5) {
+      b1 = "- Set up smoke advisory notifications for Sector C.";
+      b2 = "- Prepare fire containment staging zones.";
+      b3 = "- Monitor dry wind gusts and temperature patterns.";
+    } else {
+      b1 = "- Prepare emergency shelters in Sector B.";
+      b2 = "- Coordinate with aviation authorities for airport closure.";
+      b3 = "- Monitor gas emissions (SO2/CO2) and tremor frequency.";
+    }
+
+    Fumbo::Graphic2D::DrawText(
+        b1, {briefingRect.x + 30.0f, briefingRect.y + 100.0f}, font, 11, BLACK);
+    Fumbo::Graphic2D::DrawText(
+        b2, {briefingRect.x + 30.0f, briefingRect.y + 140.0f}, font, 11, BLACK);
+    Fumbo::Graphic2D::DrawText(
+        b3, {briefingRect.x + 30.0f, briefingRect.y + 180.0f}, font, 11, BLACK);
+
+    Rectangle continueBtn = {briefingRect.x + briefingRect.width - 140.0f,
+                             briefingRect.y + briefingRect.height - 45.0f,
+                             110.0f, 30.0f};
+    bool continueHovered = CheckCollisionPointRec(mouse, continueBtn);
+    Fumbo::Graphic2D::DrawRectangleRec(continueBtn, {192, 192, 192, 255});
+    Fumbo::Graphic2D::DrawLineEx(
+        {continueBtn.x, continueBtn.y},
+        {continueBtn.x + continueBtn.width, continueBtn.y}, 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {continueBtn.x, continueBtn.y},
+        {continueBtn.x, continueBtn.y + continueBtn.height}, 1.5f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {continueBtn.x + continueBtn.width - 1.5f, continueBtn.y},
+        {continueBtn.x + continueBtn.width - 1.5f,
+         continueBtn.y + continueBtn.height},
+        1.5f, BLACK);
+    Fumbo::Graphic2D::DrawLineEx(
+        {continueBtn.x, continueBtn.y + continueBtn.height - 1.5f},
+        {continueBtn.x + continueBtn.width,
+         continueBtn.y + continueBtn.height - 1.5f},
+        1.5f, BLACK);
+
+    Fumbo::Graphic2D::DrawText("START SHIFT",
+                               {continueBtn.x + 24.0f, continueBtn.y + 10.0f},
+                               font, 10, BLACK);
+
+    if (continueHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+      m_shiftBriefingVisible = false;
+      m_desktop->Notify("Operations", "Shift " + std::to_string(m_shiftNumber) +
+                                          " briefing complete.");
+    }
+  } else if (s_campaignVictoryVisible) {
+    Fumbo::Graphic2D::DrawRectangleRec({0.0f, 0.0f, 1280.0f, 720.0f},
+                                       {0, 128, 128, 255});
+
+    Rectangle vicRect = {340.0f, 110.0f, 600.0f, 500.0f};
+    Fumbo::Graphic2D::DrawRectangleRec(vicRect, {192, 192, 192, 255});
+
+    Fumbo::Graphic2D::DrawLineEx({vicRect.x, vicRect.y},
+                                 {vicRect.x + vicRect.width, vicRect.y}, 1.5f,
+                                 WHITE);
+    Fumbo::Graphic2D::DrawLineEx({vicRect.x, vicRect.y},
+                                 {vicRect.x, vicRect.y + vicRect.height}, 1.5f,
+                                 WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {vicRect.x + vicRect.width - 1.5f, vicRect.y},
+        {vicRect.x + vicRect.width - 1.5f, vicRect.y + vicRect.height}, 1.5f,
+        {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx(
+        {vicRect.x, vicRect.y + vicRect.height - 1.5f},
+        {vicRect.x + vicRect.width, vicRect.y + vicRect.height - 1.5f}, 1.5f,
+        {128, 128, 128, 255});
+
+    Rectangle headerRect = {vicRect.x + 4.0f, vicRect.y + 4.0f,
+                            vicRect.width - 8.0f, 22.0f};
+    Fumbo::Graphic2D::DrawRectangleRec(headerRect, {0, 0, 128, 255});
+    Fumbo::Graphic2D::DrawText("CAMPAIGN SUCCESS",
+                               {headerRect.x + 8.0f, headerRect.y + 5.0f}, font,
+                               11, WHITE);
+
+    Fumbo::Graphic2D::DrawText(
+        "Congratulations Officer! Your 7-day tenure at the NDMC is complete:",
+        {vicRect.x + 30.0f, vicRect.y + 45.0f}, font, 11, BLACK);
+    Fumbo::Graphic2D::DrawText("- Shift 1: Northern River Flood - SECURED",
+                               {vicRect.x + 45.0f, vicRect.y + 80.0f}, font, 10,
+                               {0, 100, 0, 255});
+    Fumbo::Graphic2D::DrawText("- Shift 2: Sector C Wildfire - CONTAINED",
+                               {vicRect.x + 45.0f, vicRect.y + 102.0f}, font,
+                               10, {0, 100, 0, 255});
+    Fumbo::Graphic2D::DrawText(
+        "- Shift 3: Mt. Fumbo Volcano Eruption - EVACUATED",
+        {vicRect.x + 45.0f, vicRect.y + 124.0f}, font, 10, {0, 100, 0, 255});
+    Fumbo::Graphic2D::DrawText("- Shift 4: Flash Flood Surge - RESOLVED",
+                               {vicRect.x + 45.0f, vicRect.y + 146.0f}, font,
+                               10, {0, 100, 0, 255});
+    Fumbo::Graphic2D::DrawText(
+        "- Shift 5: Highlands Forest Fire - EXTINGUISHED",
+        {vicRect.x + 45.0f, vicRect.y + 168.0f}, font, 10, {0, 100, 0, 255});
+    Fumbo::Graphic2D::DrawText("- Shift 6: Volcanic Tremor Crisis - MANAGED",
+                               {vicRect.x + 45.0f, vicRect.y + 190.0f}, font,
+                               10, {0, 100, 0, 255});
+    Fumbo::Graphic2D::DrawText(
+        "- Shift 7: Mega-Hazard Cascading Collapse - MITIGATED",
+        {vicRect.x + 45.0f, vicRect.y + 212.0f}, font, 10, {0, 100, 0, 255});
+
+    Fumbo::Graphic2D::DrawText(
+        "NDMC Executive Board Evaluation: EXCELLENT PERFORMANCE.",
+        {vicRect.x + 30.0f, vicRect.y + 250.0f}, font, 11, BLACK);
+    Fumbo::Graphic2D::DrawText(
+        "Your critical thinking under pressure saved countless lives.",
+        {vicRect.x + 30.0f, vicRect.y + 280.0f}, font, 11, BLACK);
+    Fumbo::Graphic2D::DrawText(
+        "Early warning telemetry works only when humans are brave enough",
+        {vicRect.x + 30.0f, vicRect.y + 310.0f}, font, 11, BLACK);
+    Fumbo::Graphic2D::DrawText(
+        "to analyze facts, assess risk, and act before it is too late.",
+        {vicRect.x + 30.0f, vicRect.y + 330.0f}, font, 11, BLACK);
+
+    Rectangle mainBtn = {vicRect.x + vicRect.width - 150.0f,
+                         vicRect.y + vicRect.height - 45.0f, 130.0f, 30.0f};
+    bool btnHovered = CheckCollisionPointRec(mouse, mainBtn);
+    Fumbo::Graphic2D::DrawRectangleRec(mainBtn, {192, 192, 192, 255});
+    Fumbo::Graphic2D::DrawLineEx({mainBtn.x, mainBtn.y},
+                                 {mainBtn.x + mainBtn.width, mainBtn.y}, 1.5f,
+                                 WHITE);
+    Fumbo::Graphic2D::DrawLineEx({mainBtn.x, mainBtn.y},
+                                 {mainBtn.x, mainBtn.y + mainBtn.height}, 1.5f,
+                                 WHITE);
+    Fumbo::Graphic2D::DrawLineEx(
+        {mainBtn.x + mainBtn.width - 1.5f, mainBtn.y},
+        {mainBtn.x + mainBtn.width - 1.5f, mainBtn.y + mainBtn.height}, 1.5f,
+        BLACK);
+    Fumbo::Graphic2D::DrawLineEx(
+        {mainBtn.x, mainBtn.y + mainBtn.height - 1.5f},
+        {mainBtn.x + mainBtn.width, mainBtn.y + mainBtn.height - 1.5f}, 1.5f,
+        BLACK);
+
+    Fumbo::Graphic2D::DrawText("RETURN TO MENU",
+                               {mainBtn.x + 16.0f, mainBtn.y + 10.0f}, font, 9,
+                               BLACK);
+
+    if (btnHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+      s_campaignVictoryVisible = false;
+      Fumbo::Instance().ChangeState(std::make_shared<TitleScreen>());
+    }
+  }
 }
 
 // Setup Helpers
 
 void DemoDesktop::SetupDesktopIcons() {
+  // How to Play icon
+  m_desktop->AddDesktopIcon("How to Play", m_bookmarkIconTex, m_bgIconTex,
+                            [this]() { OpenTutorialWindow(); });
+
   // Threat Center icon
   m_desktop->AddDesktopIcon(
       "Threat Center", m_threatIconTex, m_bgIconTex, [this]() {
@@ -187,9 +677,8 @@ void DemoDesktop::SetupDesktopIcons() {
             "Mitigation Hub", {100, 100, 500, 350},
             [this](Rectangle area) { DrawMitigationHub(area); },
             m_mitigationIconTex);
-        m_desktop->Notify("Mitigation Hub",
-                          "Operational window active at " +
-                              GetCurrentTimeLabel() + ".");
+        m_desktop->Notify("Mitigation Hub", "Operational window active at " +
+                                                GetCurrentTimeLabel() + ".");
       });
 
   // Decision Log icon
@@ -199,17 +688,24 @@ void DemoDesktop::SetupDesktopIcons() {
             "Decision Log", {100, 100, 500, 350},
             [this](Rectangle area) { DrawDecisionLog(area); },
             m_bookmarkIconTex);
-        m_desktop->Notify("Decision Log",
-                          "Decision Log opened at " + GetCurrentTimeLabel() +
-                              ".");
+        m_desktop->Notify("Decision Log", "Decision Log opened at " +
+                                              GetCurrentTimeLabel() + ".");
       });
 
   // Notes icon
-  m_desktop->AddDesktopIcon("Notes", m_bookmarkIconTex, m_bgIconTex, [this]() {
+  m_desktop->AddDesktopIcon("Notes", m_notesIconTex, m_bgIconTex, [this]() {
     m_notesWindowId = m_desktop->OpenWindow(
         "Notes", {300, 140, 380, 280},
-        [this](Rectangle area) { DrawNotesContent(area); }, m_bookmarkIconTex);
+        [this](Rectangle area) { DrawNotesContent(area); }, m_notesIconTex);
   });
+
+  // Field Radio icon
+  m_desktop->AddDesktopIcon(
+      "Field Radio", m_commsIconTex, m_bgIconTex, [this]() {
+        m_radioWindowId = m_desktop->OpenWindow(
+            "Field Radio", {200, 80, 520, 480},
+            [this](Rectangle area) { DrawRadioContent(area); }, m_commsIconTex);
+      });
 }
 
 void DemoDesktop::SetupStartMenu() {
@@ -245,15 +741,15 @@ void DemoDesktop::SetupContextMenu() {
     m_desktop->OpenWindow(
         title, {150.0f + count * 20.0f, 80.0f + count * 15.0f, 420.0f, 280.0f},
         [title](Rectangle area) {
-          Fumbo::Graphic2D::DrawText(
-              "Content of " + title, {area.x + 15.0f, area.y + 15.0f},
-              GetFontDefault(), 14, {200, 200, 230, 255});
-          Fumbo::Graphic2D::DrawText(
-              "Drag the title bar to move", {area.x + 15.0f, area.y + 40.0f},
-              GetFontDefault(), 12, {150, 150, 180, 255});
-          Fumbo::Graphic2D::DrawText(
-              "Drag edges to resize", {area.x + 15.0f, area.y + 58.0f},
-              GetFontDefault(), 12, {150, 150, 180, 255});
+          Fumbo::Graphic2D::DrawText("Content of " + title,
+                                     {area.x + 15.0f, area.y + 15.0f},
+                                     OS::GlobalFont, 14, {200, 200, 230, 255});
+          Fumbo::Graphic2D::DrawText("Drag the title bar to move",
+                                     {area.x + 15.0f, area.y + 40.0f},
+                                     OS::GlobalFont, 12, {150, 150, 180, 255});
+          Fumbo::Graphic2D::DrawText("Drag edges to resize",
+                                     {area.x + 15.0f, area.y + 58.0f},
+                                     OS::GlobalFont, 12, {150, 150, 180, 255});
         });
   });
 
@@ -274,18 +770,19 @@ void DemoDesktop::SetupSystemTray() {
       "clock",
       [this](Rectangle area) {
         std::string dateText = "07/17/2026";
-        Font font = GetFontDefault();
+        Font font = OS::GlobalFont;
 
-        Vector2 timeSize = MeasureTextEx(font, GetCurrentTimeLabel().c_str(), 10, 1.0f);
+        Vector2 timeSize =
+            MeasureTextEx(font, GetCurrentTimeLabel().c_str(), 10, 1.0f);
         Vector2 dateSize = MeasureTextEx(font, dateText.c_str(), 8, 1.0f);
 
         float totalHeight = timeSize.y + 2.0f + dateSize.y;
         float startY = area.y + (area.height - totalHeight) * 0.5f;
 
-        Fumbo::Graphic2D::DrawText(GetCurrentTimeLabel(),
-                                   {area.x + (area.width - timeSize.x) * 0.5f,
-                                    startY},
-                                   font, 10, BLACK);
+        Fumbo::Graphic2D::DrawText(
+            GetCurrentTimeLabel(),
+            {area.x + (area.width - timeSize.x) * 0.5f, startY}, font, 10,
+            BLACK);
         Fumbo::Graphic2D::DrawText(dateText,
                                    {area.x + (area.width - dateSize.x) * 0.5f,
                                     startY + timeSize.y + 2.0f},
@@ -301,7 +798,7 @@ void DemoDesktop::DrawTerminalContent(Rectangle area) {
 
   float y = area.y + 10.0f;
   float x = area.x + 10.0f;
-  Font font = GetFontDefault();
+  Font font = OS::GlobalFont;
 
   Fumbo::Graphic2D::DrawText("user@fumbo-os:~$", {x, y}, font, 12,
                              {80, 220, 80, 255});
@@ -318,7 +815,7 @@ void DemoDesktop::DrawTerminalContent(Rectangle area) {
 void DemoDesktop::DrawSettingsContent(Rectangle area) {
   float y = area.y + 15.0f;
   float x = area.x + 15.0f;
-  Font font = GetFontDefault();
+  Font font = OS::GlobalFont;
 
   Fumbo::Graphic2D::DrawText("System Settings", {x, y}, font, 15, WHITE);
   y += 30.0f;
@@ -340,7 +837,7 @@ void DemoDesktop::DrawSettingsContent(Rectangle area) {
 void DemoDesktop::DrawFileManagerContent(Rectangle area) {
   float y = area.y + 10.0f;
   float x = area.x + 10.0f;
-  Font font = GetFontDefault();
+  Font font = OS::GlobalFont;
 
   // Path bar
   Rectangle pathBar = {x, y, area.width - 20.0f, 24.0f};
@@ -377,10 +874,198 @@ void DemoDesktop::DrawNotesContent(Rectangle area) {
   m_notesTextbox.Draw();
 }
 
+void DemoDesktop::DrawRadioContent(Rectangle area) {
+  Font font = OS::GlobalFont;
+  Vector2 scale = Fumbo::Utils::GetUIScale();
+  Vector2 offset = Fumbo::Utils::GetUIOffset();
+  Vector2 rawMouse = GetMousePosition();
+  Vector2 mouse = {(rawMouse.x - offset.x) / scale.x,
+                   (rawMouse.y - offset.y) / scale.y};
+
+  // Draw Windows 95 gray body background
+  Fumbo::Graphic2D::DrawRectangleRec(area, {192, 192, 192, 255});
+
+  // Active contact info banner at top
+  std::string contact = "Hendro";
+  std::string role = "Dam Warden (Sector A)";
+  if (m_shiftNumber == 2 || m_shiftNumber == 5) {
+    contact = "Budi";
+    role = "Fire Captain (Sector C)";
+  } else if (m_shiftNumber == 3 || m_shiftNumber == 6 || m_shiftNumber == 7) {
+    contact = "Dr. Surono";
+    role = "Chief Volcanologist (Sector B)";
+  }
+
+  Rectangle banner = {area.x + 8.0f, area.y + 8.0f, area.width - 16.0f, 26.0f};
+  Fumbo::Graphic2D::DrawRectangleRec(
+      banner, {10, 36, 106, 255}); // Dark blue Windows 95 header
+  Fumbo::Graphic2D::DrawText("CHANNEL 1: " + contact + " - " + role,
+                             {banner.x + 8.0f, banner.y + 7.0f}, font, 10,
+                             WHITE);
+
+  // Chat message logs panel (inset frame style)
+  Rectangle chatPanel = {area.x + 8.0f, area.y + 40.0f, area.width - 16.0f,
+                         area.height - 95.0f};
+  Fumbo::Graphic2D::DrawRectangleRec(chatPanel, WHITE);
+  // Draw classic 3D border around chat panel (inset)
+  Fumbo::Graphic2D::DrawLineEx({chatPanel.x, chatPanel.y},
+                               {chatPanel.x + chatPanel.width, chatPanel.y},
+                               1.5f, {128, 128, 128, 255});
+  Fumbo::Graphic2D::DrawLineEx({chatPanel.x, chatPanel.y},
+                               {chatPanel.x, chatPanel.y + chatPanel.height},
+                               1.5f, {128, 128, 128, 255});
+  Fumbo::Graphic2D::DrawLineEx(
+      {chatPanel.x + chatPanel.width, chatPanel.y},
+      {chatPanel.x + chatPanel.width, chatPanel.y + chatPanel.height}, 1.5f,
+      WHITE);
+  Fumbo::Graphic2D::DrawLineEx(
+      {chatPanel.x, chatPanel.y + chatPanel.height},
+      {chatPanel.x + chatPanel.width, chatPanel.y + chatPanel.height}, 1.5f,
+      WHITE);
+
+  // Render recent messages from bottom to top
+  float chatY = chatPanel.y + chatPanel.height - 12.0f;
+  for (int i = static_cast<int>(m_radioChatHistory.size()) - 1; i >= 0; --i) {
+    const auto &msg = m_radioChatHistory[i];
+    std::string sender = msg.first;
+    std::string text = msg.second;
+    std::string fullMsg = "[" + sender + "] " + text;
+
+    // Wrap fullMsg into lines
+    std::vector<std::string> lines;
+    int lineStart = 0;
+    int lineLength = 52; // Characters per line limit inside chat panel
+    while (lineStart < (int)fullMsg.length()) {
+      std::string line = fullMsg.substr(lineStart, lineLength);
+      if (lineStart + lineLength < (int)fullMsg.length()) {
+        size_t lastSpace = line.find_last_of(' ');
+        if (lastSpace != std::string::npos) {
+          line = line.substr(0, lastSpace);
+          lineStart += lastSpace + 1;
+        } else {
+          lineStart += lineLength;
+        }
+      } else {
+        lineStart += lineLength;
+      }
+      lines.push_back(line);
+    }
+
+    // Draw lines of the wrapped message starting from the last line up
+    for (int l = static_cast<int>(lines.size()) - 1; l >= 0; --l) {
+      chatY -= 14.0f;
+      if (chatY < chatPanel.y + 6.0f)
+        break;
+
+      Color col = BLACK;
+      if (sender == "RADIO")
+        col = {100, 100, 150, 255};
+      else if (sender == "Hendro")
+        col = {0, 0, 150, 255};
+      else if (sender == "Budi")
+        col = {150, 0, 0, 255};
+      else if (sender == "Dr. Surono")
+        col = {0, 120, 0, 255};
+      else
+        col = {40, 40, 40, 255}; // user
+
+      Fumbo::Graphic2D::DrawText(lines[l], {chatPanel.x + 8.0f, chatY}, font, 9,
+                                 col);
+    }
+
+    if (chatY < chatPanel.y + 6.0f)
+      break;
+  }
+
+  // Draw loading overlay if pending AI response
+  if (m_radioPending) {
+    Fumbo::Graphic2D::DrawRectangleRec({chatPanel.x + 10.0f,
+                                        chatPanel.y + chatPanel.height - 30.0f,
+                                        chatPanel.width - 20.0f, 20.0f},
+                                       {230, 230, 230, 200});
+    Fumbo::Graphic2D::DrawText(
+        "RECEIVING TRANSMISSION...",
+        {chatPanel.x + 18.0f, chatPanel.y + chatPanel.height - 25.0f}, font, 9,
+        {255, 140, 0, 255});
+  }
+
+  // Draw input text box and send button
+  float inputY = area.y + area.height - 36.0f;
+  m_radioInputTextbox.SetBounds(
+      {area.x + 8.0f, inputY, area.width - 100.0f, 28.0f});
+  m_radioInputTextbox.Draw();
+
+  Rectangle sendBtn = {area.x + area.width - 82.0f, inputY, 74.0f, 28.0f};
+  bool sendHovered = CheckCollisionPointRec(mouse, sendBtn);
+  Fumbo::Graphic2D::DrawRectangleRec(sendBtn, {192, 192, 192, 255});
+  Fumbo::Graphic2D::DrawLineEx({sendBtn.x, sendBtn.y},
+                               {sendBtn.x + sendBtn.width, sendBtn.y}, 1.5f,
+                               WHITE);
+  Fumbo::Graphic2D::DrawLineEx({sendBtn.x, sendBtn.y},
+                               {sendBtn.x, sendBtn.y + sendBtn.height}, 1.5f,
+                               WHITE);
+  Fumbo::Graphic2D::DrawLineEx(
+      {sendBtn.x + sendBtn.width - 1.5f, sendBtn.y},
+      {sendBtn.x + sendBtn.width - 1.5f, sendBtn.y + sendBtn.height}, 1.5f,
+      BLACK);
+  Fumbo::Graphic2D::DrawLineEx(
+      {sendBtn.x, sendBtn.y + sendBtn.height - 1.5f},
+      {sendBtn.x + sendBtn.width, sendBtn.y + sendBtn.height - 1.5f}, 1.5f,
+      BLACK);
+
+  Fumbo::Graphic2D::DrawText("SEND", {sendBtn.x + 22.0f, sendBtn.y + 9.0f},
+                             font, 9, BLACK);
+
+  // Trigger send action if clicked or enter pressed
+  bool triggerSend = false;
+  if (sendHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    triggerSend = true;
+  }
+  if (m_radioInputTextbox.IsFocused() &&
+      (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))) {
+    triggerSend = true;
+  }
+
+  if (triggerSend && !m_radioPending) {
+    std::string msg = m_radioInputTextbox.GetText();
+    if (!msg.empty()) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+      m_radioChatHistory.push_back({"Officer", msg});
+      m_radioInputTextbox.SetText("");
+
+      // Generate telemetry context for the prompt
+      std::string telemetryStr = "";
+      int shift = m_shiftNumber;
+      const auto &threat = m_gameManager.GetCurrentThreatCenter();
+      if (shift == 1 || shift == 4) {
+        telemetryStr =
+            "Rainfall: " + std::to_string(threat.flood.rainfall) +
+            " mm/h, River Depth: " + std::to_string(threat.flood.riverDepth) +
+            " m";
+      } else if (shift == 2 || shift == 5) {
+        telemetryStr =
+            "Temperature: " + std::to_string(threat.wildfire.temperature) +
+            "C, Humidity: " + std::to_string(threat.wildfire.humidity) + "%";
+      } else {
+        telemetryStr =
+            "Tremors: " + std::to_string(threat.earthquake.tremorsPerHour) +
+            "/h, Gas: " + std::to_string(threat.earthquake.gasEmission) +
+            " ppm, Ground: " +
+            std::to_string(threat.earthquake.groundDeformation) + " mm";
+      }
+
+      // Launch async AI request
+      m_radioFuture =
+          Game::AIService::RequestChatResponseAsync(contact, msg, telemetryStr);
+      m_radioPending = true;
+    }
+  }
+}
+
 void DemoDesktop::DrawAboutContent(Rectangle area) {
-  Font font = GetFontDefault();
-  Fumbo::Graphic2D::DrawText("Fumbo OS Simulation",
-                             {area.x + 15.0f, area.y + 15.0f}, font, 16, WHITE);
+  Font font = OS::GlobalFont;
+  Fumbo::Graphic2D::DrawText("Sentinels", {area.x + 15.0f, area.y + 15.0f},
+                             font, 16, WHITE);
   Fumbo::Graphic2D::DrawText("Built with Fumbo Engine",
                              {area.x + 15.0f, area.y + 40.0f}, font, 12,
                              {180, 180, 200, 255});
@@ -394,7 +1079,7 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   Fumbo::Graphic2D::DrawRectangleRec(area, {20, 24, 33, 255});
 
   float padding = 10.0f;
-  Font font = GetFontDefault();
+  Font font = OS::GlobalFont;
 
   // 2. Define Layout columns (58% left map, 42% right SOP)
   float leftWidth = area.width * 0.58f;
@@ -407,14 +1092,14 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
 
   // Draw header for Map section
   Fumbo::Graphic2D::DrawText("REGIONAL MONITORING MAP",
-                             {leftX + 5.0f, leftY + 5.0f}, font, 13,
+                             {leftX + 5.0f, leftY + 3.0f}, font, 13,
                              {0, 230, 118, 255});
   Fumbo::Graphic2D::DrawText("CURRENT TIME: " + GetCurrentTimeLabel(),
                              {leftX + 5.0f, leftY + 20.0f}, font, 10,
                              {255, 215, 0, 255});
 
   // Draw simulated map box
-  Rectangle mapBox = {leftX, leftY + 25.0f, leftW, leftH - 25.0f};
+  Rectangle mapBox = {leftX, leftY + 38.0f, leftW, leftH - 38.0f};
   Fumbo::Graphic2D::DrawRectangleRounded(mapBox, 0.05f, 4, {28, 33, 46, 255});
   Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(mapBox, 0.05f, 4, 1.0f,
                                                 {50, 60, 80, 255});
@@ -475,11 +1160,11 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
 
   // Draw header for SOP Reference Drawer
   Fumbo::Graphic2D::DrawText("MONITORING PROTOCOLS",
-                             {rightX + 5.0f, rightY + 5.0f}, font, 13,
+                             {rightX + 5.0f, rightY + 3.0f}, font, 13,
                              {255, 215, 0, 255});
 
   // Draw a content frame for SOP text
-  Rectangle sopBox = {rightX, rightY + 25.0f, rightW, rightH - 25.0f};
+  Rectangle sopBox = {rightX, rightY + 38.0f, rightW, rightH - 38.0f};
   Fumbo::Graphic2D::DrawRectangleRounded(sopBox, 0.05f, 4, {23, 27, 38, 255});
   Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(sopBox, 0.05f, 4, 1.0f,
                                                 {50, 60, 80, 255});
@@ -537,17 +1222,22 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   Game::ThreatCenterState threat;
   if (!scenario.shifts.empty()) {
     const auto &shift = scenario.shifts.at(0);
-    if (m_currentTimeWindowIndex >= 0 && m_currentTimeWindowIndex < static_cast<int>(shift.windows.size())) {
-      threat = shift.windows.at(static_cast<std::size_t>(m_currentTimeWindowIndex)).threatCenter;
+    if (m_currentTimeWindowIndex >= 0 &&
+        m_currentTimeWindowIndex < static_cast<int>(shift.windows.size())) {
+      threat =
+          shift.windows.at(static_cast<std::size_t>(m_currentTimeWindowIndex))
+              .threatCenter;
     }
   }
 
   // SEC-A: Flood sensors
   char bufA[128];
-  std::snprintf(bufA, sizeof(bufA), "SEC-A: %.1fm | %dmm/h (%s)",
-                threat.flood.riverDepth,
-                static_cast<int>(threat.flood.rainfall),
-                (threat.flood.riverDepth >= 4.6f || threat.flood.rainfall >= 80.0f) ? "WARN" : "OK");
+  std::snprintf(
+      bufA, sizeof(bufA), "SEC-A: %.1fm | %dmm/h (%s)", threat.flood.riverDepth,
+      static_cast<int>(threat.flood.rainfall),
+      (threat.flood.riverDepth >= 4.6f || threat.flood.rainfall >= 80.0f)
+          ? "WARN"
+          : "OK");
   std::string monitorA(bufA);
 
   // SEC-B: Seismic
@@ -559,10 +1249,16 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
 
   // SEC-C: Wildfire
   char bufC[128];
-  std::snprintf(bufC, sizeof(bufC), "SEC-C: %d C | Hum %d%% (%s)",
-                static_cast<int>(threat.wildfire.temperature),
-                static_cast<int>(threat.wildfire.humidity),
-                (threat.wildfire.temperature >= 41 || threat.wildfire.humidity <= 9) ? "CRITICAL" : ((threat.wildfire.temperature >= 39 || threat.wildfire.humidity <= 12) ? "WARN" : "OK"));
+  std::snprintf(
+      bufC, sizeof(bufC), "SEC-C: %d C | Hum %d%% (%s)",
+      static_cast<int>(threat.wildfire.temperature),
+      static_cast<int>(threat.wildfire.humidity),
+      (threat.wildfire.temperature >= 41 || threat.wildfire.humidity <= 9)
+          ? "CRITICAL"
+          : ((threat.wildfire.temperature >= 39 ||
+              threat.wildfire.humidity <= 12)
+                 ? "WARN"
+                 : "OK"));
   std::string monitorC(bufC);
   Fumbo::Graphic2D::DrawText(monitorA, {textX + 8.0f, textY}, font, 10,
                              {180, 235, 180, 255});
@@ -602,9 +1298,13 @@ void DemoDesktop::AddDecisionLogEntry(const std::string &title,
 void DemoDesktop::DrawDecisionLog(Rectangle area) {
   Fumbo::Graphic2D::DrawRectangleRec(area, {20, 24, 33, 255});
 
-  Font font = GetFontDefault();
+  Font font = OS::GlobalFont;
   float padding = 12.0f;
-  Vector2 mouse = GetMousePosition();
+  Vector2 scale = Fumbo::Utils::GetUIScale();
+  Vector2 offset = Fumbo::Utils::GetUIOffset();
+  Vector2 rawMouse = GetMousePosition();
+  Vector2 mouse = {(rawMouse.x - offset.x) / scale.x,
+                   (rawMouse.y - offset.y) / scale.y};
 
   float summaryH = 84.0f;
   Rectangle summaryBar = {area.x + padding, area.y + padding,
@@ -624,9 +1324,11 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
 
   std::string totalActions = std::to_string(log.size());
   int budgetSpentInt = 0;
-  if (!log.empty()) budgetSpentInt = log.back().budgetSpent;
+  if (!log.empty())
+    budgetSpentInt = log.back().budgetSpent;
   std::string budgetSpent = "$" + std::to_string(std::max(0, budgetSpentInt));
-  std::string trustDelta = (m_publicTrust >= 85) ? "+0" : std::to_string(m_publicTrust - 85);
+  std::string trustDelta =
+      (m_publicTrust >= 85) ? "+0" : std::to_string(m_publicTrust - 85);
   if (m_publicTrust != 85 && trustDelta[0] != '-') {
     trustDelta = "+" + trustDelta;
   }
@@ -634,7 +1336,8 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
   if (!log.empty()) {
     primaryThreat = "Shift " + std::to_string(log.back().shiftNumber);
   }
-  std::string shiftStatus = log.empty() ? "No completed shifts" : "Review active";
+  std::string shiftStatus =
+      log.empty() ? "No completed shifts" : "Review active";
 
   float colW = (summaryBar.width - 40.0f) / 5.0f;
   float summaryY = summaryBar.y + 30.0f;
@@ -707,8 +1410,9 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
       Fumbo::Graphic2D::DrawText(std::to_string(entry.shiftNumber),
                                  {rowRect.x + 8.0f, rowRect.y + 8.0f}, font, 9,
                                  {255, 215, 0, 255});
-      Fumbo::Graphic2D::DrawText(
-          std::string("Shift Summary"), {rowRect.x + 58.0f, rowRect.y + 8.0f}, font, 9, WHITE);
+      Fumbo::Graphic2D::DrawText(std::string("Shift Summary"),
+                                 {rowRect.x + 58.0f, rowRect.y + 8.0f}, font, 9,
+                                 WHITE);
       Fumbo::Graphic2D::DrawText(std::to_string(entry.peopleSaved) + " saved",
                                  {rowRect.x + 58.0f, rowRect.y + 18.0f}, font,
                                  8, {150, 150, 170, 255});
@@ -717,16 +1421,20 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
       Rectangle badgeRect = {rowRect.x + rowRect.width - 64.0f,
                              rowRect.y + 8.0f, 56.0f, 16.0f};
       Color ratingColor = {255, 23, 68, 255};
-      if (entry.overallRating >= 4.0f) ratingColor = {0, 230, 118, 255};
-      else if (entry.overallRating >= 2.0f) ratingColor = {255, 215, 0, 255};
+      if (entry.overallRating >= 4.0f)
+        ratingColor = {0, 230, 118, 255};
+      else if (entry.overallRating >= 2.0f)
+        ratingColor = {255, 215, 0, 255};
       Fumbo::Graphic2D::DrawRectangleRounded(badgeRect, 0.2f, 4, ratingColor);
       char ratingBuf[8];
-      std::snprintf(ratingBuf, sizeof(ratingBuf), "%.1f/5", entry.overallRating);
+      std::snprintf(ratingBuf, sizeof(ratingBuf), "%.1f/5",
+                    entry.overallRating);
       Fumbo::Graphic2D::DrawText(std::string(ratingBuf),
                                  {badgeRect.x + 8.0f, badgeRect.y + 3.0f}, font,
                                  8, WHITE);
 
       if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
         m_selectedDecisionLogEntry = index;
       }
     }
@@ -748,11 +1456,13 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
 
   if (log.empty() || m_selectedDecisionLogEntry < 0 ||
       m_selectedDecisionLogEntry >= static_cast<int>(log.size())) {
-    Fumbo::Graphic2D::DrawText("Select a completed shift to inspect its details.",
-                               {detailPanel.x + 12.0f, detailPanel.y + 42.0f},
-                               font, 10, {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText(
+        "Select a completed shift to inspect its details.",
+        {detailPanel.x + 12.0f, detailPanel.y + 42.0f}, font, 10,
+        {140, 140, 160, 255});
   } else {
-    const Game::GameState::ShiftSummary &entry = log[m_selectedDecisionLogEntry];
+    const Game::GameState::ShiftSummary &entry =
+        log[m_selectedDecisionLogEntry];
     float dy = detailPanel.y + 40.0f;
     auto DrawDetailRow = [&](const std::string &label,
                              const std::string &value) {
@@ -767,12 +1477,14 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
     DrawDetailRow("Overall Rating", std::to_string(entry.overallRating));
     DrawDetailRow("People Saved", std::to_string(entry.peopleSaved));
     DrawDetailRow("Casualties", std::to_string(entry.casualties));
-    DrawDetailRow("Budget Spent", std::string("$") + std::to_string(entry.budgetSpent));
+    DrawDetailRow("Budget Spent",
+                  std::string("$") + std::to_string(entry.budgetSpent));
     DrawDetailRow("Public Trust", std::to_string(entry.publicTrust) + "%");
     if (!entry.actionsTaken.empty()) {
       std::string actions;
       for (const auto &a : entry.actionsTaken) {
-        if (!actions.empty()) actions += ", ";
+        if (!actions.empty())
+          actions += ", ";
         actions += a;
       }
       DrawDetailRow("Actions", actions);
@@ -818,50 +1530,61 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
   // 0: BreakingNews
   {
     auto pr = PriorityToString(comms.breakingNews.priority);
-    cards[0] = {"BREAKING NEWS", "[!]", comms.breakingNews.title,
-                comms.breakingNews.timestamp, pr.first, comms.breakingNews.preview,
-                comms.breakingNews.fullReport, pr.second, comms.breakingNews.unread};
+    cards[0] = {"BREAKING NEWS",
+                "[!]",
+                comms.breakingNews.title,
+                comms.breakingNews.timestamp,
+                pr.first,
+                comms.breakingNews.preview,
+                comms.breakingNews.fullReport,
+                pr.second,
+                comms.breakingNews.unread};
   }
   // 1: Weather
   {
     auto pr = PriorityToString(comms.weather.priority);
-    cards[1] = {"WEATHER UPDATE", "[W]", comms.weather.title,
-                comms.weather.timestamp, pr.first, comms.weather.preview,
+    cards[1] = {"WEATHER UPDATE",         "[W]",     comms.weather.title,
+                comms.weather.timestamp,  pr.first,  comms.weather.preview,
                 comms.weather.fullReport, pr.second, comms.weather.unread};
   }
   // 2: Citizen
   {
     auto pr = PriorityToString(comms.citizen.priority);
-    cards[2] = {"CITIZEN REPORT", "[C]", comms.citizen.title,
-                comms.citizen.timestamp, pr.first, comms.citizen.preview,
+    cards[2] = {"CITIZEN REPORT",         "[C]",     comms.citizen.title,
+                comms.citizen.timestamp,  pr.first,  comms.citizen.preview,
                 comms.citizen.fullReport, pr.second, comms.citizen.unread};
   }
   // 3: Sensor
   {
     auto pr = PriorityToString(comms.sensor.priority);
-    cards[3] = {"CCTV / SENSOR", "[S]", comms.sensor.title,
-                comms.sensor.timestamp, pr.first, comms.sensor.preview,
+    cards[3] = {"CCTV / SENSOR",         "[S]",     comms.sensor.title,
+                comms.sensor.timestamp,  pr.first,  comms.sensor.preview,
                 comms.sensor.fullReport, pr.second, comms.sensor.unread};
   }
   // 4: Rescue
   {
     auto pr = PriorityToString(comms.rescue.priority);
-    cards[4] = {"RESCUE REPORT", "[R]", comms.rescue.title,
-                comms.rescue.timestamp, pr.first, comms.rescue.preview,
+    cards[4] = {"RESCUE REPORT",         "[R]",     comms.rescue.title,
+                comms.rescue.timestamp,  pr.first,  comms.rescue.preview,
                 comms.rescue.fullReport, pr.second, comms.rescue.unread};
   }
   // 5: Infrastructure
   {
     auto pr = PriorityToString(comms.infrastructure.priority);
-    cards[5] = {"INFRASTRUCTURE", "[I]", comms.infrastructure.title,
-                comms.infrastructure.timestamp, pr.first,
-                comms.infrastructure.preview, comms.infrastructure.fullReport,
-                pr.second, comms.infrastructure.unread};
+    cards[5] = {"INFRASTRUCTURE",
+                "[I]",
+                comms.infrastructure.title,
+                comms.infrastructure.timestamp,
+                pr.first,
+                comms.infrastructure.preview,
+                comms.infrastructure.fullReport,
+                pr.second,
+                comms.infrastructure.unread};
   }
 
   float padding = 12.0f;
   float gap = 10.0f;
-  Font font = GetFontDefault();
+  Font font = OS::GlobalFont;
   std::string currentTime = GetCurrentTimeLabel();
 
   // Grid calculation split
@@ -870,7 +1593,11 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
   float leftH = area.height - 2.0f * padding;
 
   // Track if mouse is over any card
-  Vector2 mouse = GetMousePosition();
+  Vector2 scale = Fumbo::Utils::GetUIScale();
+  Vector2 offset = Fumbo::Utils::GetUIOffset();
+  Vector2 rawMouse = GetMousePosition();
+  Vector2 mouse = {(rawMouse.x - offset.x) / scale.x,
+                   (rawMouse.y - offset.y) / scale.y};
 
   // Helper to draw a single card
   auto DrawCard = [&](int index, Rectangle r, bool isFeatured) {
@@ -879,6 +1606,7 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
     // Handle click interaction
     if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
         s_selectedCommsCard == -1) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
       s_selectedCommsCard = index;
     }
 
@@ -923,8 +1651,9 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
 
     // Timestamp (from backend)
     y += isFeatured ? 20.0f : 15.0f;
-    Fumbo::Graphic2D::DrawText(std::string("RECEIVED: ") + cards[index].timestamp, {x, y}, font, 8,
-                   {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText(std::string("RECEIVED: ") +
+                                   cards[index].timestamp,
+                               {x, y}, font, 8, {140, 140, 160, 255});
 
     // Divider line
     y += isFeatured ? 15.0f : 12.0f;
@@ -1039,9 +1768,10 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
 
     // Classification stamp with backend timestamp
     my += 20.0f;
-    Fumbo::Graphic2D::DrawText(std::string("TIME: ") + cards[s_selectedCommsCard].timestamp +
-                     "  |  STATUS: CLASSIFIED INTEL",
-                   {mx, my}, font, 9, {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText(std::string("TIME: ") +
+                                   cards[s_selectedCommsCard].timestamp +
+                                   "  |  STATUS: CLASSIFIED INTEL",
+                               {mx, my}, font, 9, {140, 140, 160, 255});
 
     // Divider
     my += 16.0f;
@@ -1091,18 +1821,37 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
         "CLOSE [X]", {closeBtn.x + 18.0f, closeBtn.y + 7.0f}, font, 9, WHITE);
 
     if (btnHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
       s_selectedCommsCard = -1; // Dismiss modal
     }
   }
 }
 
 void DemoDesktop::DrawMitigationHub(Rectangle area) {
+  int shiftIdx = m_shiftNumber;
+  if (shiftIdx == 1 || shiftIdx == 4)
+    s_mitigationTab = 0;
+  else if (shiftIdx == 2 || shiftIdx == 5)
+    s_mitigationTab = 1;
+  else
+    s_mitigationTab = 2;
+
+  Game::DisasterType currentType = Game::DisasterType::Flood;
+  if (s_mitigationTab == 1)
+    currentType = Game::DisasterType::Wildfire;
+  else if (s_mitigationTab == 2)
+    currentType = Game::DisasterType::Earthquake;
+
   // Dark background
   Fumbo::Graphic2D::DrawRectangleRec(area, {20, 24, 33, 255});
 
-  Font font = GetFontDefault();
+  Font font = OS::GlobalFont;
   float padding = 12.0f;
-  Vector2 mouse = GetMousePosition();
+  Vector2 scale = Fumbo::Utils::GetUIScale();
+  Vector2 offset = Fumbo::Utils::GetUIOffset();
+  Vector2 rawMouse = GetMousePosition();
+  Vector2 mouse = {(rawMouse.x - offset.x) / scale.x,
+                   (rawMouse.y - offset.y) / scale.y};
   s_hoveredMitAction = -1; // Reset each frame
 
   // --- Action Data ---
@@ -1155,17 +1904,19 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
   Fumbo::Graphic2D::DrawText("SHIFT " + std::to_string(m_shiftNumber),
                              {area.x + padding, area.y + padding + 2.0f}, font,
                              10, {255, 215, 0, 255});
-  Fumbo::Graphic2D::DrawText("TIME: " + GetCurrentTimeLabel(),
-                             {area.x + padding + 90.0f, area.y + padding + 2.0f},
-                             font, 10, {0, 230, 118, 255});
-  std::string progressText = "WINDOW " + std::to_string(m_currentTimeWindowIndex + 1) + " / 4";
-  Fumbo::Graphic2D::DrawText(progressText,
-                             {area.x + padding + 210.0f, area.y + padding + 2.0f},
-                             font, 10, {140, 180, 255, 255});
+  Fumbo::Graphic2D::DrawText(
+      "TIME: " + GetCurrentTimeLabel(),
+      {area.x + padding + 90.0f, area.y + padding + 2.0f}, font, 10,
+      {0, 230, 118, 255});
+  std::string progressText =
+      "WINDOW " + std::to_string(m_currentTimeWindowIndex + 1) + " / 4";
+  Fumbo::Graphic2D::DrawText(
+      progressText, {area.x + padding + 210.0f, area.y + padding + 2.0f}, font,
+      10, {140, 180, 255, 255});
 
   // ========== 1. RESOURCE OVERVIEW BAR ==========
   float barH = 34.0f;
-  Rectangle resBar = {area.x + padding, area.y + padding,
+  Rectangle resBar = {area.x + padding, area.y + padding + 18.0f,
                       area.width - 2 * padding, barH};
   Fumbo::Graphic2D::DrawRectangleRounded(resBar, 0.08f, 4, {28, 33, 46, 255});
   Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(resBar, 0.08f, 4, 1.0f,
@@ -1177,28 +1928,28 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
 
   Fumbo::Graphic2D::DrawText("BUDGET:", {rx, ry}, font, 9,
                              {150, 150, 170, 255});
-  Fumbo::Graphic2D::DrawText("$50,000", {rx + 55.0f, ry}, font, 10,
-                             {140, 255, 140, 255});
 
   Fumbo::Graphic2D::DrawText("PUBLIC TRUST:", {rx + colSpacing, ry}, font, 9,
                              {150, 150, 170, 255});
-  Fumbo::Graphic2D::DrawText("85%", {rx + colSpacing + 90.0f, ry}, font, 10,
-                             {0, 230, 118, 255});
 
   Fumbo::Graphic2D::DrawText("RESCUE TEAMS:", {rx + 2 * colSpacing, ry}, font,
                              9, {150, 150, 170, 255});
   // Live values from backend GameState
   {
     Game::GameState &gs = m_gameManager.GetGameState();
-    Fumbo::Graphic2D::DrawText(std::string("$") + std::to_string(gs.budget), {rx + 55.0f, ry}, font, 10,
+    Fumbo::Graphic2D::DrawText(std::string("$") + std::to_string(gs.budget),
+                               {rx + 55.0f, ry}, font, 10,
                                {140, 255, 140, 255});
-    Fumbo::Graphic2D::DrawText(std::to_string(gs.publicTrust) + "%", {rx + colSpacing + 90.0f, ry}, font, 10,
+    Fumbo::Graphic2D::DrawText(std::to_string(gs.publicTrust) + "%",
+                               {rx + colSpacing + 90.0f, ry}, font, 10,
                                {0, 230, 118, 255});
-    Fumbo::Graphic2D::DrawText(std::to_string(gs.rescueTeams) + " AVAILABLE", {rx + 2 * colSpacing + 95.0f, ry}, font, 10, {140, 180, 255, 255});
+    Fumbo::Graphic2D::DrawText(std::to_string(gs.rescueTeams) + " AVAILABLE",
+                               {rx + 2 * colSpacing + 95.0f, ry}, font, 10,
+                               {140, 180, 255, 255});
   }
 
   // ========== 2. DISASTER TABS ==========
-  float tabY = area.y + padding + barH + 10.0f;
+  float tabY = area.y + padding + 18.0f + barH + 8.0f;
   float tabGap = 8.0f;
   float tabW = (area.width - 2 * padding - 2 * tabGap) / 3.0f;
   float tabH = 30.0f;
@@ -1227,8 +1978,9 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                                {tabRect.x + textOff, tabRect.y + 9.0f}, font,
                                10, tabTextColor);
 
-    if (tabHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      s_mitigationTab = t;
+    if (tabHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+        t == s_mitigationTab) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
     }
   }
 
@@ -1256,32 +2008,48 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
   float actionH = 30.0f;
   float actionGap = 4.0f;
 
-  // Helper mapping from tab/action index -> Game::ActionID (available to the whole function)
+  // Helper mapping from tab/action index -> Game::ActionID (available to the
+  // whole function)
   auto getActionId = [](int tabIdx, int actionIdx) -> Game::ActionID {
     using Game::ActionID;
     if (tabIdx == 0) {
       switch (actionIdx) {
-      case 0: return ActionID::IssueWarning;
-      case 1: return ActionID::DeployRescue;
-      case 2: return ActionID::OpenShelter;
-      case 3: return ActionID::CloseRoad;
-      case 4: return ActionID::EvacuateResidents;
+      case 0:
+        return ActionID::IssueWarning;
+      case 1:
+        return ActionID::DeployRescue;
+      case 2:
+        return ActionID::OpenShelter;
+      case 3:
+        return ActionID::CloseRoad;
+      case 4:
+        return ActionID::EvacuateResidents;
       }
     } else if (tabIdx == 1) {
       switch (actionIdx) {
-      case 0: return ActionID::IssueWarning;
-      case 1: return ActionID::DeployRescue;
-      case 2: return ActionID::RequestAirSupport;
-      case 3: return ActionID::EvacuateResidents;
-      case 4: return ActionID::CloseRoad;
+      case 0:
+        return ActionID::IssueWarning;
+      case 1:
+        return ActionID::DeployRescue;
+      case 2:
+        return ActionID::RequestAirSupport;
+      case 3:
+        return ActionID::EvacuateResidents;
+      case 4:
+        return ActionID::CloseRoad;
       }
     } else {
       switch (actionIdx) {
-      case 0: return ActionID::IssueWarning;
-      case 1: return ActionID::EvacuateResidents;
-      case 2: return ActionID::CloseRoad;
-      case 3: return ActionID::OpenShelter;
-      case 4: return ActionID::DeployRescue;
+      case 0:
+        return ActionID::IssueWarning;
+      case 1:
+        return ActionID::EvacuateResidents;
+      case 2:
+        return ActionID::CloseRoad;
+      case 3:
+        return ActionID::OpenShelter;
+      case 4:
+        return ActionID::DeployRescue;
       }
     }
     return ActionID::IssueWarning;
@@ -1294,7 +2062,9 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     Game::GameState &gs = m_gameManager.GetGameState();
 
     Game::ActionID aid = getActionId(tab, i);
-    bool queued = (std::find(gs.selectedActions.begin(), gs.selectedActions.end(), aid) != gs.selectedActions.end());
+    bool queued =
+        (std::find(gs.selectedActions.begin(), gs.selectedActions.end(), aid) !=
+         gs.selectedActions.end());
 
     Color bg =
         queued ? Color{25, 50, 35, 255}
@@ -1323,14 +2093,18 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                                font, 10, {210, 210, 230, 255});
 
     // Cost indicator on the right
-    std::string costStr = "COST: " + std::string(actions[tab][i].budgetImpact);
+    std::string costStr =
+        "COST: $" +
+        std::to_string(Game::Simulation::GetActionBudgetCost(aid, currentType));
     Fumbo::Graphic2D::DrawText(
         costStr, {actionRect.x + actionRect.width - 90.0f, actionRect.y + 8.0f},
         font, 9, {255, 140, 140, 255});
 
     // Toggle on click: add/remove ActionID from GameState.selectedActions
     if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      auto it = std::find(gs.selectedActions.begin(), gs.selectedActions.end(), aid);
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+      auto it =
+          std::find(gs.selectedActions.begin(), gs.selectedActions.end(), aid);
       if (it != gs.selectedActions.end()) {
         gs.selectedActions.erase(it);
       } else {
@@ -1370,8 +2144,12 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
 
     Fumbo::Graphic2D::DrawText("Budget Impact:", {px, py}, font, 9,
                                {150, 150, 170, 255});
-    Fumbo::Graphic2D::DrawText(actions[tab][ai].budgetImpact, {px + 100.0f, py},
-                               font, 10, {255, 140, 140, 255});
+    Game::ActionID previewAid = getActionId(tab, ai);
+    std::string costValStr =
+        "$" + std::to_string(Game::Simulation::GetActionBudgetCost(
+                  previewAid, currentType));
+    Fumbo::Graphic2D::DrawText(costValStr, {px + 100.0f, py}, font, 10,
+                               {255, 140, 140, 255});
     py += 16.0f;
 
     Fumbo::Graphic2D::DrawText("Resource Use:", {px, py}, font, 9,
@@ -1427,15 +2205,19 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     std::vector<int> actionsInTab;
     for (int a = 0; a < 5; a++) {
       Game::ActionID aid = getActionId(t, a);
-      if (std::find(gsQueue.selectedActions.begin(), gsQueue.selectedActions.end(), aid) != gsQueue.selectedActions.end()) {
+      if (std::find(gsQueue.selectedActions.begin(),
+                    gsQueue.selectedActions.end(),
+                    aid) != gsQueue.selectedActions.end()) {
         actionsInTab.push_back(a);
       }
     }
-    if (actionsInTab.empty()) continue;
+    if (actionsInTab.empty())
+      continue;
 
     // Tab section label
     std::string secLabel = std::string("[") + tabIcons[t] + "] " + tabNames[t];
-    Fumbo::Graphic2D::DrawText(secLabel, {rightX + 12.0f, queueY}, font, 9, tabColors[t]);
+    Fumbo::Graphic2D::DrawText(secLabel, {rightX + 12.0f, queueY}, font, 9,
+                               tabColors[t]);
     queueY += 16.0f;
 
     for (int idx : actionsInTab) {
@@ -1446,24 +2228,33 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
       Fumbo::Graphic2D::DrawRectangleRounded(qItemRect, 0.06f, 4, qBg);
 
       // Colored left accent
-      Rectangle accent = {qItemRect.x, qItemRect.y + 2.0f, 3.0f, qItemRect.height - 4.0f};
+      Rectangle accent = {qItemRect.x, qItemRect.y + 2.0f, 3.0f,
+                          qItemRect.height - 4.0f};
       Fumbo::Graphic2D::DrawRectangleRec(accent, tabColors[t]);
 
       // Action name
       std::string aName = actions[t][idx].name;
-      if (aName.length() > 24) aName = aName.substr(0, 21) + "...";
-      Fumbo::Graphic2D::DrawText(aName, {qItemRect.x + 10.0f, qItemRect.y + 6.0f}, font, 9, {210, 210, 230, 255});
+      if (aName.length() > 24)
+        aName = aName.substr(0, 21) + "...";
+      Fumbo::Graphic2D::DrawText(aName,
+                                 {qItemRect.x + 10.0f, qItemRect.y + 6.0f},
+                                 font, 9, {210, 210, 230, 255});
 
       // Remove button
       float removeX = qItemRect.x + qItemRect.width - 26.0f;
-      Color removeColor = qHovered ? Color{255, 80, 80, 255} : Color{120, 120, 150, 255};
-      Fumbo::Graphic2D::DrawText("[X]", {removeX, qItemRect.y + 6.0f}, font, 9, removeColor);
+      Color removeColor =
+          qHovered ? Color{255, 80, 80, 255} : Color{120, 120, 150, 255};
+      Fumbo::Graphic2D::DrawText("[X]", {removeX, qItemRect.y + 6.0f}, font, 9,
+                                 removeColor);
 
       if (qHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+        Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
         // remove from GameState.selectedActions
         Game::ActionID aid = getActionId(t, idx);
-        auto it = std::find(gsQueue.selectedActions.begin(), gsQueue.selectedActions.end(), aid);
-        if (it != gsQueue.selectedActions.end()) gsQueue.selectedActions.erase(it);
+        auto it = std::find(gsQueue.selectedActions.begin(),
+                            gsQueue.selectedActions.end(), aid);
+        if (it != gsQueue.selectedActions.end())
+          gsQueue.selectedActions.erase(it);
       }
 
       queueY += 28.0f;
@@ -1496,18 +2287,17 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                                 ? "EXECUTE PLAN & ADVANCE TIME"
                                 : "COMPLETE SHIFT";
 
-  Color endBg = (canAdvance)
-                    ? (endHovered ? Color{200, 40, 40, 255} : Color{160, 25, 25, 255})
-                    : Color{50, 50, 60, 255};
+  Color endBg = (canAdvance) ? (endHovered ? Color{200, 40, 40, 255}
+                                           : Color{160, 25, 25, 255})
+                             : Color{50, 50, 60, 255};
   Fumbo::Graphic2D::DrawRectangleRounded(endBtn, 0.1f, 4, endBg);
   Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
       endBtn, 0.1f, 4, 1.2f,
       canAdvance ? Color{255, 80, 80, 255} : Color{70, 70, 85, 255});
 
   Color btnTextColor = canAdvance ? WHITE : Color{100, 100, 110, 255};
-  Fumbo::Graphic2D::DrawText(buttonLabel,
-                             {endBtn.x + 12.0f, endBtn.y + 10.0f}, font, 10,
-                             btnTextColor);
+  Fumbo::Graphic2D::DrawText(buttonLabel, {endBtn.x + 12.0f, endBtn.y + 10.0f},
+                             font, 10, btnTextColor);
 
   // Queue count badge
   if (queueCount > 0) {
@@ -1517,97 +2307,14 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                                font, 10, {255, 215, 0, 255});
   }
 
-  if (m_shiftSummaryVisible) {
-    Fumbo::Graphic2D::DrawRectangleRec(area, {8, 10, 16, 230});
-    Rectangle summaryRect = {area.x + 24.0f, area.y + 24.0f, area.width - 48.0f,
-                             area.height - 48.0f};
-    Fumbo::Graphic2D::DrawRectangleRounded(summaryRect, 0.03f, 4,
-                                           {20, 24, 33, 255});
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(summaryRect, 0.03f, 4, 1.2f,
-                                                  {255, 215, 0, 255});
-    Fumbo::Graphic2D::DrawText("SHIFT SUMMARY",
-                               {summaryRect.x + 16.0f, summaryRect.y + 16.0f}, font,
-                               13, {255, 215, 0, 255});
-    Fumbo::Graphic2D::DrawText("Operational performance snapshot",
-                               {summaryRect.x + 16.0f, summaryRect.y + 38.0f}, font,
-                               10, {180, 180, 210, 255});
+  if (m_shiftNumber == 1) {
+    float pulse = (sinf(GetTime() * 6.0f) + 1.0f) * 0.5f;
+    Color glowColor = {255, 215, 0, (unsigned char)(100 + pulse * 155)};
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(endBtn, 0.1f, 4, 2.0f,
+                                                  glowColor);
+  }
 
-    std::string stats[][2] = {{"Lives Saved", "142"}, {"Casualties", "8"},
-                              {"Infrastructure Damage", "24%"},
-                              {"Budget Remaining", "$27,500"},
-                              {"Public Trust Change", "+6%"},
-                              {"Overall Rating", "4.2/5"}};
-    float statY = summaryRect.y + 70.0f;
-    for (int i = 0; i < 6; i++) {
-      Fumbo::Graphic2D::DrawText(stats[i][0], {summaryRect.x + 16.0f, statY + i * 22.0f}, font, 10,
-                                 {220, 220, 235, 255});
-      Fumbo::Graphic2D::DrawText(stats[i][1], {summaryRect.x + summaryRect.width - 120.0f, statY + i * 22.0f}, font, 10,
-                                 {0, 230, 118, 255});
-    }
-
-    Fumbo::Graphic2D::DrawText(
-        "A family made it home tonight, but eight others were lost to the storm's delay.",
-        {summaryRect.x + 16.0f, summaryRect.y + summaryRect.height - 86.0f}, font,
-        10, {255, 180, 120, 255});
-    Fumbo::Graphic2D::DrawText(
-        "The city will remember who acted fast, and who hesitated too long.",
-        {summaryRect.x + 16.0f, summaryRect.y + summaryRect.height - 66.0f}, font,
-        10, {255, 120, 120, 255});
-
-    Rectangle closeBtn = {summaryRect.x + summaryRect.width - 104.0f,
-                          summaryRect.y + summaryRect.height - 40.0f, 88.0f,
-                          24.0f};
-    bool closeHovered = CheckCollisionPointRec(mouse, closeBtn);
-    Fumbo::Graphic2D::DrawRectangleRounded(closeBtn, 0.1f, 4, closeHovered ? Color{80, 80, 95, 255} : Color{50, 55, 70, 255});
-    Fumbo::Graphic2D::DrawText("CONTINUE", {closeBtn.x + 20.0f, closeBtn.y + 6.0f}, font, 9, WHITE);
-
-    if (closeHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      m_shiftSummaryVisible = false;
-      m_shiftBriefingVisible = true;
-      m_shiftNumber++;
-      m_currentTimeWindowIndex = 0;
-      m_currentTimeLabel = "08:00";
-      m_cityStatus = "ALERT";
-      for (int t = 0; t < 3; t++)
-        for (int a = 0; a < 5; a++)
-          s_queuedActions[t][a] = false;
-    }
-  } else if (m_shiftBriefingVisible) {
-    Fumbo::Graphic2D::DrawRectangleRec(area, {8, 10, 16, 230});
-    Rectangle briefingRect = {area.x + 24.0f, area.y + 24.0f, area.width - 48.0f,
-                              area.height - 48.0f};
-    Fumbo::Graphic2D::DrawRectangleRounded(briefingRect, 0.03f, 4,
-                                           {20, 24, 33, 255});
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(briefingRect, 0.03f, 4, 1.2f,
-                                                  {0, 230, 118, 255});
-    Fumbo::Graphic2D::DrawText("OPERATIONAL BRIEFING",
-                               {briefingRect.x + 16.0f, briefingRect.y + 16.0f}, font,
-                               13, {0, 230, 118, 255});
-    Fumbo::Graphic2D::DrawText("Next shift readiness update",
-                               {briefingRect.x + 16.0f, briefingRect.y + 38.0f}, font,
-                               10, {180, 180, 210, 255});
-    Fumbo::Graphic2D::DrawText("- Recheck sensor calibration before dispatch.",
-                               {briefingRect.x + 16.0f, briefingRect.y + 70.0f}, font,
-                               10, {220, 220, 235, 255});
-    Fumbo::Graphic2D::DrawText("- Prepare shelter and communications routes.",
-                               {briefingRect.x + 16.0f, briefingRect.y + 92.0f}, font,
-                               10, {220, 220, 235, 255});
-    Fumbo::Graphic2D::DrawText("- Maintain public trust with clear updates.",
-                               {briefingRect.x + 16.0f, briefingRect.y + 114.0f}, font,
-                               10, {220, 220, 235, 255});
-
-    Rectangle continueBtn = {briefingRect.x + briefingRect.width - 104.0f,
-                             briefingRect.y + briefingRect.height - 40.0f, 88.0f,
-                             24.0f};
-    bool continueHovered = CheckCollisionPointRec(mouse, continueBtn);
-    Fumbo::Graphic2D::DrawRectangleRounded(continueBtn, 0.1f, 4, continueHovered ? Color{80, 120, 90, 255} : Color{50, 90, 60, 255});
-    Fumbo::Graphic2D::DrawText("RETURN", {continueBtn.x + 24.0f, continueBtn.y + 6.0f}, font, 9, WHITE);
-
-    if (continueHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      m_shiftBriefingVisible = false;
-      m_desktop->Notify("Operations", "Shift " + std::to_string(m_shiftNumber) + " briefing complete.");
-    }
-  } else if (s_showEndShiftConfirm && canAdvance) {
+  if (s_showEndShiftConfirm && canAdvance) {
     Fumbo::Graphic2D::DrawRectangleRec(area, {12, 14, 21, 220});
     Rectangle modalRect = {area.x + 70.0f, area.y + 70.0f, area.width - 140.0f,
                            area.height - 140.0f};
@@ -1616,10 +2323,14 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(modalRect, 0.04f, 4, 1.2f,
                                                   {255, 80, 80, 255});
 
-    std::string confirmTitle = (m_currentTimeWindowIndex < 3) ? "ADVANCE TIME WINDOW" : "COMPLETE SHIFT";
-    std::string confirmText = (m_currentTimeWindowIndex < 3)
-                                  ? "Execute the queued actions and advance to the next operational window?"
-                                  : "Complete the shift and review the summary?";
+    std::string confirmTitle = (m_currentTimeWindowIndex < 3)
+                                   ? "ADVANCE TIME WINDOW"
+                                   : "COMPLETE SHIFT";
+    std::string confirmText =
+        (m_currentTimeWindowIndex < 3)
+            ? "Execute the queued actions and advance to the next operational "
+              "window?"
+            : "Complete the shift and review the summary?";
     Fumbo::Graphic2D::DrawText(confirmTitle,
                                {modalRect.x + 16.0f, modalRect.y + 16.0f}, font,
                                11, {255, 215, 0, 255});
@@ -1649,18 +2360,28 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
         "CANCEL", {cancelBtn.x + 24.0f, cancelBtn.y + 8.0f}, font, 9, WHITE);
 
     if (confirmHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
       // Create decision log entries from the current selected actions
       Game::GameState &gsConfirm = m_gameManager.GetGameState();
       for (int t = 0; t < 3; t++) {
         for (int a = 0; a < 5; a++) {
           Game::ActionID aid = getActionId(t, a);
-          if (std::find(gsConfirm.selectedActions.begin(), gsConfirm.selectedActions.end(), aid) == gsConfirm.selectedActions.end())
+          if (std::find(gsConfirm.selectedActions.begin(),
+                        gsConfirm.selectedActions.end(),
+                        aid) == gsConfirm.selectedActions.end())
             continue;
-          std::string disaster = (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
-          std::string sector = (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
-          AddDecisionLogEntry(actions[t][a].name, disaster, sector, "Completed",
-                             (std::string(actions[t][a].budgetImpact) == "---" || std::string(actions[t][a].budgetImpact) == "--" || std::string(actions[t][a].budgetImpact) == "-" ? "$5,000" : "$10,000"),
-                             "Action executed during the shift");
+          std::string disaster =
+              (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
+          std::string sector =
+              (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
+          AddDecisionLogEntry(
+              actions[t][a].name, disaster, sector, "Completed",
+              (std::string(actions[t][a].budgetImpact) == "---" ||
+                       std::string(actions[t][a].budgetImpact) == "--" ||
+                       std::string(actions[t][a].budgetImpact) == "-"
+                   ? "$5,000"
+                   : "$10,000"),
+              "Action executed during the shift");
         }
       }
 
@@ -1674,13 +2395,15 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
         // Sync UI-level values from backend GameState/GameManager
         Game::GameState &gs = m_gameManager.GetGameState();
         m_currentTimeWindowIndex = m_gameManager.GetCurrentWindow();
-        m_currentTimeLabel = std::string(Game::GameState::GetWindowDisplayTime(m_currentTimeWindowIndex));
+        m_currentTimeLabel = std::string(
+            Game::GameState::GetWindowDisplayTime(m_currentTimeWindowIndex));
         m_budget = gs.budget;
         m_publicTrust = gs.publicTrust;
         m_shiftNumber = m_gameManager.GetCurrentShift();
 
         if (!shiftContinues) {
-          // Shift ended: record a ShiftSummary in GameState.decisionLog and show summary
+          // Shift ended: record a ShiftSummary in GameState.decisionLog and
+          // show summary
           Game::GameState &gsFinal = m_gameManager.GetGameState();
           Game::GameState::ShiftSummary summary;
           summary.shiftNumber = gsFinal.currentShift;
@@ -1688,34 +2411,45 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
           summary.casualties = gsFinal.casualties;
           summary.budgetSpent = gsFinal.shiftStartingBudget - gsFinal.budget;
           summary.publicTrust = gsFinal.publicTrust;
-          // Build actionsTaken from the entries we added to the UI decision log earlier
+          // Build actionsTaken from the entries we added to the UI decision log
+          // earlier
           for (const auto &entry : m_decisionLog) {
             summary.actionsTaken.push_back(entry.title);
           }
           // Compute a simple overall rating from public trust (normalized)
-          summary.overallRating = std::clamp(gsFinal.publicTrust / 20.0f, 0.0f, 5.0f);
+          summary.overallRating =
+              std::clamp(gsFinal.publicTrust / 20.0f, 0.0f, 5.0f);
           gsFinal.decisionLog.push_back(summary);
           m_shiftSummaryVisible = true;
         } else {
           // Shift continues: keep UI in next window. Keep legacy notifications.
+          if (m_currentTimeWindowIndex >= 2) {
+            Fumbo::Engine::Instance().GetAudioManager().PlaySound("warning");
+          }
           if (m_currentTimeWindowIndex == 2) {
-            m_desktop->Notify("Threat Center",
-                              "Critical update: conditions are worsening across the city.");
+            m_desktop->Notify(
+                "Threat Center",
+                "Critical update: conditions are worsening across the city.");
           } else if (m_currentTimeWindowIndex == 3) {
-            m_desktop->Notify("Threat Center",
-                              "Emergency update: evacuation zones are now active.");
+            m_desktop->Notify(
+                "Threat Center",
+                "Emergency update: evacuation zones are now active.");
           } else {
             m_desktop->Notify("Operations",
-                              "Advance complete. Current time is " + GetCurrentTimeLabel() + ".");
+                              "Advance complete. Current time is " +
+                                  GetCurrentTimeLabel() + ".");
           }
         }
       }
 
       s_showEndShiftConfirm = false;
     } else if (cancelHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
       s_showEndShiftConfirm = false;
     }
-  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && canAdvance) {
+  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+             canAdvance) {
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
     s_showEndShiftConfirm = true;
   }
 }
@@ -1728,18 +2462,25 @@ void DemoDesktop::DrawStatusBar() {
   Fumbo::Graphic2D::DrawRectangleRec({0.0f, 0.0f, screenWidth, barHeight},
                                      {192, 192, 192, 255});
   // Bottom Border
-  Fumbo::Graphic2D::DrawLineEx({0.0f, barHeight - 1.0f}, {screenWidth, barHeight - 1.0f},
-                               1.0f, {128, 128, 128, 255});
+  Fumbo::Graphic2D::DrawLineEx({0.0f, barHeight - 1.0f},
+                               {screenWidth, barHeight - 1.0f}, 1.0f,
+                               {128, 128, 128, 255});
 
   Font font = GetFontDefault();
   float textY = 8.0f;
 
   auto DrawInsetBox = [](Rectangle r) {
     Fumbo::Graphic2D::DrawRectangleRec(r, {192, 192, 192, 255});
-    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x + r.width, r.y}, 1.0f, {128, 128, 128, 255});
-    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x, r.y + r.height}, 1.0f, {128, 128, 128, 255});
-    Fumbo::Graphic2D::DrawLineEx({r.x + r.width - 1.0f, r.y}, {r.x + r.width - 1.0f, r.y + r.height}, 1.0f, WHITE);
-    Fumbo::Graphic2D::DrawLineEx({r.x, r.y + r.height - 1.0f}, {r.x + r.width, r.y + r.height - 1.0f}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x + r.width, r.y}, 1.0f,
+                                 {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x, r.y + r.height}, 1.0f,
+                                 {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({r.x + r.width - 1.0f, r.y},
+                                 {r.x + r.width - 1.0f, r.y + r.height}, 1.0f,
+                                 WHITE);
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y + r.height - 1.0f},
+                                 {r.x + r.width, r.y + r.height - 1.0f}, 1.0f,
+                                 WHITE);
   };
 
   // Helper mapping from tab/action index -> Game::ActionID
@@ -1747,27 +2488,42 @@ void DemoDesktop::DrawStatusBar() {
     using Game::ActionID;
     if (tabIdx == 0) {
       switch (actionIdx) {
-      case 0: return ActionID::IssueWarning;
-      case 1: return ActionID::DeployRescue;
-      case 2: return ActionID::OpenShelter;
-      case 3: return ActionID::CloseRoad;
-      case 4: return ActionID::EvacuateResidents;
+      case 0:
+        return ActionID::IssueWarning;
+      case 1:
+        return ActionID::DeployRescue;
+      case 2:
+        return ActionID::OpenShelter;
+      case 3:
+        return ActionID::CloseRoad;
+      case 4:
+        return ActionID::EvacuateResidents;
       }
     } else if (tabIdx == 1) {
       switch (actionIdx) {
-      case 0: return ActionID::IssueWarning;
-      case 1: return ActionID::DeployRescue;
-      case 2: return ActionID::RequestAirSupport;
-      case 3: return ActionID::EvacuateResidents;
-      case 4: return ActionID::CloseRoad;
+      case 0:
+        return ActionID::IssueWarning;
+      case 1:
+        return ActionID::DeployRescue;
+      case 2:
+        return ActionID::RequestAirSupport;
+      case 3:
+        return ActionID::EvacuateResidents;
+      case 4:
+        return ActionID::CloseRoad;
       }
     } else {
       switch (actionIdx) {
-      case 0: return ActionID::IssueWarning;
-      case 1: return ActionID::EvacuateResidents;
-      case 2: return ActionID::CloseRoad;
-      case 3: return ActionID::OpenShelter;
-      case 4: return ActionID::DeployRescue;
+      case 0:
+        return ActionID::IssueWarning;
+      case 1:
+        return ActionID::EvacuateResidents;
+      case 2:
+        return ActionID::CloseRoad;
+      case 3:
+        return ActionID::OpenShelter;
+      case 4:
+        return ActionID::DeployRescue;
       }
     }
     return ActionID::IssueWarning;
@@ -1788,17 +2544,20 @@ void DemoDesktop::DrawStatusBar() {
     statusColor = {215, 100, 0, 255}; // Orange
   else if (m_cityStatus == "CRITICAL" || m_cityStatus == "EVACUATE")
     statusColor = {180, 0, 0, 255}; // Red
-  Fumbo::Graphic2D::DrawText(m_cityStatus, {290.0f, textY}, font, 12, statusColor);
+  Fumbo::Graphic2D::DrawText(m_cityStatus, {290.0f, textY}, font, 12,
+                             statusColor);
 
   // 3. Budget
   DrawInsetBox({580.0f, 4.0f, 320.0f, 22.0f});
   Fumbo::Graphic2D::DrawText("BUDGET: ", {590.0f, textY}, font, 12, BLACK);
   std::string budgetValText = "$" + std::to_string(gs.budget);
-  Fumbo::Graphic2D::DrawText(budgetValText, {660.0f, textY}, font, 12, {0, 128, 0, 255});
+  Fumbo::Graphic2D::DrawText(budgetValText, {660.0f, textY}, font, 12,
+                             {0, 128, 0, 255});
 
   // 4. Public Trust
   DrawInsetBox({920.0f, 4.0f, 320.0f, 22.0f});
-  Fumbo::Graphic2D::DrawText("PUBLIC TRUST: ", {930.0f, textY}, font, 12, BLACK);
+  Fumbo::Graphic2D::DrawText("PUBLIC TRUST: ", {930.0f, textY}, font, 12,
+                             BLACK);
   std::string trustText = std::to_string(gs.publicTrust) + "%";
   Color trustColor = {0, 128, 0, 255};
   if (gs.publicTrust < 35)
@@ -1809,42 +2568,51 @@ void DemoDesktop::DrawStatusBar() {
 
   // 5. City Status Indicator (Overall Health)
   // Calculate overall city status from existing GameState values
-  // Formula: Population Safety (40%) + Infrastructure (25%) + Public Trust (20%) + Emergency Capacity (15%)
-  
+  // Formula: Population Safety (40%) + Infrastructure (25%) + Public Trust
+  // (20%) + Emergency Capacity (15%)
+
   // Population Safety: Based on casualties vs people saved ratio
   float populationSafety = 100.0f;
   int totalAffected = gs.peopleSaved + gs.casualties;
   if (totalAffected > 0) {
-    populationSafety = (static_cast<float>(gs.peopleSaved) / static_cast<float>(totalAffected)) * 100.0f;
+    populationSafety = (static_cast<float>(gs.peopleSaved) /
+                        static_cast<float>(totalAffected)) *
+                       100.0f;
   }
-  
+
   // Infrastructure: Inverted damage percentage (100 - damage%)
-  float infrastructureHealth = 100.0f - static_cast<float>(gs.infrastructureDamage);
-  if (infrastructureHealth < 0.0f) infrastructureHealth = 0.0f;
-  
+  float infrastructureHealth =
+      100.0f - static_cast<float>(gs.infrastructureDamage);
+  if (infrastructureHealth < 0.0f)
+    infrastructureHealth = 0.0f;
+
   // Public Trust: Already 0-100 scale
   float publicTrustScore = static_cast<float>(gs.publicTrust);
-  
+
   // Emergency Capacity: Based on remaining rescue teams and budget
-  float rescueTeamCapacity = (static_cast<float>(gs.rescueTeams) / 3.0f) * 100.0f; // 3 is initial count
-  float budgetCapacity = (static_cast<float>(gs.budget) / 50000.0f) * 100.0f; // 50000 is initial budget
+  float rescueTeamCapacity = (static_cast<float>(gs.rescueTeams) / 3.0f) *
+                             100.0f; // 3 is initial count
+  float budgetCapacity = (static_cast<float>(gs.budget) / 50000.0f) *
+                         100.0f; // 50000 is initial budget
   float emergencyCapacity = (rescueTeamCapacity + budgetCapacity) / 2.0f;
-  if (emergencyCapacity > 100.0f) emergencyCapacity = 100.0f;
-  
+  if (emergencyCapacity > 100.0f)
+    emergencyCapacity = 100.0f;
+
   // Calculate weighted overall score
-  float overallCityStatus = (populationSafety * 0.40f) + 
-                            (infrastructureHealth * 0.25f) + 
-                            (publicTrustScore * 0.20f) + 
-                            (emergencyCapacity * 0.15f);
-  
+  float overallCityStatus =
+      (populationSafety * 0.40f) + (infrastructureHealth * 0.25f) +
+      (publicTrustScore * 0.20f) + (emergencyCapacity * 0.15f);
+
   // Clamp to 0-100 range
-  if (overallCityStatus > 100.0f) overallCityStatus = 100.0f;
-  if (overallCityStatus < 0.0f) overallCityStatus = 0.0f;
-  
+  if (overallCityStatus > 100.0f)
+    overallCityStatus = 100.0f;
+  if (overallCityStatus < 0.0f)
+    overallCityStatus = 0.0f;
+
   // Determine status label and color based on percentage
   std::string statusLabel;
   Color statusIndicatorColor;
-  
+
   if (overallCityStatus >= 80.0f) {
     statusLabel = "STABLE";
     statusIndicatorColor = {0, 180, 0, 255}; // Bright green
@@ -1861,19 +2629,74 @@ void DemoDesktop::DrawStatusBar() {
     statusLabel = "COLLAPSE";
     statusIndicatorColor = {200, 0, 0, 255}; // Dark red
   }
-  
+
   // Draw City Status Indicator box (positioned after Public Trust)
   float cityStatusX = 1260.0f;
   DrawInsetBox({cityStatusX, 4.0f, 340.0f, 22.0f});
-  
+
   // Draw label
-  Fumbo::Graphic2D::DrawText("CITY: ", {cityStatusX + 10.0f, textY}, font, 12, BLACK);
-  
+  Fumbo::Graphic2D::DrawText("CITY: ", {cityStatusX + 10.0f, textY}, font, 12,
+                             BLACK);
+
   // Draw percentage
   char percentBuf[8];
-  snprintf(percentBuf, sizeof(percentBuf), "%d%%", static_cast<int>(overallCityStatus));
-  Fumbo::Graphic2D::DrawText(percentBuf, {cityStatusX + 50.0f, textY}, font, 12, statusIndicatorColor);
-  
+  snprintf(percentBuf, sizeof(percentBuf), "%d%%",
+           static_cast<int>(overallCityStatus));
+  Fumbo::Graphic2D::DrawText(percentBuf, {cityStatusX + 50.0f, textY}, font, 12,
+                             statusIndicatorColor);
+
   // Draw status label
-  Fumbo::Graphic2D::DrawText(" | " + statusLabel, {cityStatusX + 90.0f, textY}, font, 12, statusIndicatorColor);
+  Fumbo::Graphic2D::DrawText(" | " + statusLabel, {cityStatusX + 90.0f, textY},
+                             font, 12, statusIndicatorColor);
+}
+
+void DemoDesktop::OpenTutorialWindow() {
+  m_desktop->OpenWindow(
+      "How to Play - Sentinel", {360, 100, 560, 480},
+      [this](Rectangle area) { DrawTutorialContent(area); }, m_bookmarkIconTex);
+}
+
+void DemoDesktop::DrawTutorialContent(Rectangle area) {
+  Fumbo::Graphic2D::DrawRectangleRec(
+      area, {240, 240, 240, 255}); // Win95 light gray window bg
+  Font font = GetFontDefault();
+  float x = area.x + 15.0f;
+  float y = area.y + 15.0f;
+
+  Fumbo::Graphic2D::DrawText("SENTINEL OPERATIONAL MANUAL", {x, y}, font, 11,
+                             {0, 0, 128, 255});
+  y += 20.0f;
+
+  const char *manualLines[] = {
+      "Your objective: Protect the city while managing resources.",
+      "",
+      "1. READ TELEMETRY (Threat Center)",
+      "   Open the Threat Center window to monitor sensors.",
+      "   Watch out for thresholds exceeding safe levels.",
+      "",
+      "2. READ COMMS & REPORTS (Comms)",
+      "   Check social media posts, BMKG, and breaking news.",
+      "   Some reports may be unverified, conflicting, or false.",
+      "",
+      "3. CO-ORDINATE MITIGATION (Mitigation Hub)",
+      "   Select actions such as evacuation, warnings, and rescue.",
+      "   Click the EXECUTE button at the bottom to process actions",
+      "   and advance the time window (08:00 -> 11:00 -> 14:00 -> 17:00).",
+      "",
+      "4. THE ECONOMIC BALANCE (Critical Learning)",
+      "   * Evacuating too early: Costs money ($12,000) and decreases",
+      "     Public Trust due to false panic/economic disruption.",
+      "   * Evacuating too late: Prevents dam/fire/volcano casualties,",
+      "     but leads to higher casualties and infrastructure damage.",
+      "",
+      "5. DAYS & SHIFTS",
+      "   * Shift 1: Flood (Sector A)",
+      "   * Shift 2: Wildfire (Sector C)",
+      "   * Shift 3: Volcano Eruption (Sector B)",
+      "   Maintain budget & trust across all shifts to win."};
+
+  for (int i = 0; i < 26; i++) {
+    Fumbo::Graphic2D::DrawText(manualLines[i], {x, y}, font, 9, BLACK);
+    y += 15.0f;
+  }
 }

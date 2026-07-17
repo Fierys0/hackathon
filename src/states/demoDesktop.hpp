@@ -66,6 +66,8 @@ private:
   void DrawCommsContent(Rectangle area);
   void DrawMitigationHub(Rectangle area);
   void DrawDecisionLog(Rectangle area);
+  void OpenTutorialWindow();
+  void DrawTutorialContent(Rectangle area);
 
   // Texture & UI elements
   Texture2D m_wallpaper;
@@ -74,9 +76,19 @@ private:
   Texture2D m_commsIconTex;
   Texture2D m_mitigationIconTex;
   Texture2D m_bookmarkIconTex;
+  Texture2D m_notesIconTex;
 
   Fumbo::UI::Textbox m_notesTextbox;
   int m_notesWindowId;
+
+  // Field Radio chatbot app
+  int m_radioWindowId;
+  Fumbo::UI::Textbox m_radioInputTextbox;
+  std::vector<std::pair<std::string, std::string>> m_radioChatHistory;
+  bool m_radioPending = false;
+  std::future<Game::AIChatResult> m_radioFuture;
+  void DrawRadioContent(Rectangle area);
+
   // Backend game manager to expose live threat center data to the UI
   Game::GameManager m_gameManager;
 };

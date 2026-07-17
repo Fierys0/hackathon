@@ -35,7 +35,7 @@ void GameState::ResetForNewShift() {
   currentWindow = 0;
   budget = 50000;
   rescueTeams = 3;
-  publicTrust = 85;
+  publicTrust = 50;
   peopleSaved = 0;
   casualties = 0;
   infrastructureDamage = 0;
