@@ -64,6 +64,7 @@ add_custom_target(pack_assets DEPENDS ${ASSET_PACK_OUTPUT})
 # Daftar semua file sumber game.
 file(GLOB_RECURSE GAME_SOURCES
     src/core/*.cpp
+    src/game/*.cpp
     src/states/*.cpp
     src/main.cpp
 )

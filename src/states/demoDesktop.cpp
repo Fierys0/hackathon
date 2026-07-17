@@ -1,4 +1,6 @@
 #include "demoDesktop.hpp"
+#include "../game/game_manager.hpp"
+#include "../game/simulation.hpp"
 #include "../core/globals.hpp"
 #include "fumbo.hpp"
 #include <algorithm>
@@ -18,10 +20,15 @@ void DemoDesktop::Init() {
   m_desktop->SetFont(OS::GlobalFont);
 
   // Initialize status bar game state
-  m_day = 3;
+  m_day = 1;
   m_budget = 50000;
   m_publicTrust = 85;
   m_cityStatus = "ALERT";
+  m_shiftNumber = 1;
+  m_currentTimeWindowIndex = 0;
+  m_currentTimeLabel = "08:00";
+  m_shiftSummaryVisible = false;
+  m_shiftBriefingVisible = false;
   m_decisionLog.clear();
   m_selectedDecisionLogEntry = -1;
   m_decisionLogScroll = 0;
@@ -93,6 +100,30 @@ void DemoDesktop::Init() {
   m_desktop->SetWallpaper(m_wallpaper);
 }
 
+std::string DemoDesktop::GetCurrentTimeLabel() const { return m_currentTimeLabel; }
+
+void DemoDesktop::AdvanceTimeWindow() {
+  if (m_currentTimeWindowIndex < 3) {
+    m_currentTimeWindowIndex++;
+  }
+
+  const char *times[] = {"08:00", "11:00", "14:00", "17:00"};
+  m_currentTimeLabel = times[m_currentTimeWindowIndex];
+
+  if (m_currentTimeWindowIndex == 1) {
+    m_cityStatus = "WATCH";
+    m_publicTrust = std::max(0, m_publicTrust - 2);
+  } else if (m_currentTimeWindowIndex == 2) {
+    m_cityStatus = "CRITICAL";
+    m_publicTrust = std::max(0, m_publicTrust - 4);
+    m_budget = std::max(0, m_budget - 4000);
+  } else if (m_currentTimeWindowIndex == 3) {
+    m_cityStatus = "EVACUATE";
+    m_publicTrust = std::max(0, m_publicTrust - 6);
+    m_budget = std::max(0, m_budget - 6000);
+  }
+}
+
 void DemoDesktop::Cleanup() {
   if (m_desktop) {
     m_desktop->Cleanup();
@@ -131,17 +162,22 @@ void DemoDesktop::SetupDesktopIcons() {
   // Threat Center icon
   m_desktop->AddDesktopIcon(
       "Threat Center", m_threatIconTex, m_bgIconTex, [this]() {
-        m_desktop->OpenWindow("Threat Center", {100, 80, 750, 450},
-                              DrawThreatCenterContent, m_threatIconTex);
+        m_desktop->OpenWindow(
+            "Threat Center", {100, 80, 750, 450},
+            [this](Rectangle area) { DrawThreatCenterContent(area); },
+            m_threatIconTex);
         m_desktop->Notify("Threat Center",
-                          "Threat Monitoring System activated.");
+                          "Threat Monitoring System activated at " +
+                              GetCurrentTimeLabel() + ".");
       });
 
   // Comms icon
   m_desktop->AddDesktopIcon("Comms", m_commsIconTex, m_bgIconTex, [this]() {
-    m_desktop->OpenWindow("Comms", {100, 100, 850, 540}, DrawCommsContent,
-                          m_commsIconTex);
-    m_desktop->Notify("Comms & Media", "Comms Activated");
+    m_desktop->OpenWindow(
+        "Comms", {100, 100, 850, 540},
+        [this](Rectangle area) { DrawCommsContent(area); }, m_commsIconTex);
+    m_desktop->Notify("Comms & Media",
+                      "Comms activated at " + GetCurrentTimeLabel() + ".");
   });
 
   // Mitigation Hub icon
@@ -152,7 +188,8 @@ void DemoDesktop::SetupDesktopIcons() {
             [this](Rectangle area) { DrawMitigationHub(area); },
             m_mitigationIconTex);
         m_desktop->Notify("Mitigation Hub",
-                          "Don't let this disaster continue.");
+                          "Operational window active at " +
+                              GetCurrentTimeLabel() + ".");
       });
 
   // Decision Log icon
@@ -162,7 +199,9 @@ void DemoDesktop::SetupDesktopIcons() {
             "Decision Log", {100, 100, 500, 350},
             [this](Rectangle area) { DrawDecisionLog(area); },
             m_bookmarkIconTex);
-        m_desktop->Notify("Decision Log", "Decision Log activated.");
+        m_desktop->Notify("Decision Log",
+                          "Decision Log opened at " + GetCurrentTimeLabel() +
+                              ".");
       });
 
   // Notes icon
@@ -233,17 +272,26 @@ void DemoDesktop::SetupContextMenu() {
 void DemoDesktop::SetupSystemTray() {
   m_desktop->AddTrayItem(
       "clock",
-      [](Rectangle area) {
-        time_t now = time(nullptr);
-        struct tm *t = localtime(&now);
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%02d:%02d", t->tm_hour, t->tm_min);
+      [this](Rectangle area) {
+        std::string dateText = "07/17/2026";
+        Font font = GetFontDefault();
 
-        float textY = area.y + (area.height - 11) * 0.5f;
-        Fumbo::Graphic2D::DrawText(buf, {area.x + 2.0f, textY},
-                                   GetFontDefault(), 11, {200, 200, 230, 255});
+        Vector2 timeSize = MeasureTextEx(font, GetCurrentTimeLabel().c_str(), 10, 1.0f);
+        Vector2 dateSize = MeasureTextEx(font, dateText.c_str(), 8, 1.0f);
+
+        float totalHeight = timeSize.y + 2.0f + dateSize.y;
+        float startY = area.y + (area.height - totalHeight) * 0.5f;
+
+        Fumbo::Graphic2D::DrawText(GetCurrentTimeLabel(),
+                                   {area.x + (area.width - timeSize.x) * 0.5f,
+                                    startY},
+                                   font, 10, BLACK);
+        Fumbo::Graphic2D::DrawText(dateText,
+                                   {area.x + (area.width - dateSize.x) * 0.5f,
+                                    startY + timeSize.y + 2.0f},
+                                   font, 8, BLACK);
       },
-      nullptr, 45.0f);
+      nullptr, 58.0f);
 }
 
 // Window Content Drawers (static: reusable from anywhere)
@@ -361,6 +409,9 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   Fumbo::Graphic2D::DrawText("REGIONAL MONITORING MAP",
                              {leftX + 5.0f, leftY + 5.0f}, font, 13,
                              {0, 230, 118, 255});
+  Fumbo::Graphic2D::DrawText("CURRENT TIME: " + GetCurrentTimeLabel(),
+                             {leftX + 5.0f, leftY + 20.0f}, font, 10,
+                             {255, 215, 0, 255});
 
   // Draw simulated map box
   Rectangle mapBox = {leftX, leftY + 25.0f, leftW, leftH - 25.0f};
@@ -480,14 +531,46 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   Fumbo::Graphic2D::DrawText("LIVE MONITOR STATUS:", {textX, textY}, font, 11,
                              {0, 230, 118, 255});
   textY += 16.0f;
-  Fumbo::Graphic2D::DrawText("SEC-A: 3.8m | 42mm/h (OK)", {textX + 8.0f, textY},
-                             font, 10, {180, 235, 180, 255});
+  // Read backend threat values for the current window. Fall back to defaults
+  // if the scenario isn't populated for some reason.
+  const auto &scenario = m_gameManager.GetScenario();
+  Game::ThreatCenterState threat;
+  if (!scenario.shifts.empty()) {
+    const auto &shift = scenario.shifts.at(0);
+    if (m_currentTimeWindowIndex >= 0 && m_currentTimeWindowIndex < static_cast<int>(shift.windows.size())) {
+      threat = shift.windows.at(static_cast<std::size_t>(m_currentTimeWindowIndex)).threatCenter;
+    }
+  }
+
+  // SEC-A: Flood sensors
+  char bufA[128];
+  std::snprintf(bufA, sizeof(bufA), "SEC-A: %.1fm | %dmm/h (%s)",
+                threat.flood.riverDepth,
+                static_cast<int>(threat.flood.rainfall),
+                (threat.flood.riverDepth >= 4.6f || threat.flood.rainfall >= 80.0f) ? "WARN" : "OK");
+  std::string monitorA(bufA);
+
+  // SEC-B: Seismic
+  char bufB[128];
+  std::snprintf(bufB, sizeof(bufB), "SEC-B: %d tremors/h (%s)",
+                threat.earthquake.tremorsPerHour,
+                (threat.earthquake.tremorsPerHour >= 11) ? "WATCH" : "OK");
+  std::string monitorB(bufB);
+
+  // SEC-C: Wildfire
+  char bufC[128];
+  std::snprintf(bufC, sizeof(bufC), "SEC-C: %d C | Hum %d%% (%s)",
+                static_cast<int>(threat.wildfire.temperature),
+                static_cast<int>(threat.wildfire.humidity),
+                (threat.wildfire.temperature >= 41 || threat.wildfire.humidity <= 9) ? "CRITICAL" : ((threat.wildfire.temperature >= 39 || threat.wildfire.humidity <= 12) ? "WARN" : "OK"));
+  std::string monitorC(bufC);
+  Fumbo::Graphic2D::DrawText(monitorA, {textX + 8.0f, textY}, font, 10,
+                             {180, 235, 180, 255});
   textY += 14.0f;
-  Fumbo::Graphic2D::DrawText("SEC-B: 7 tremors/h   (OK)", {textX + 8.0f, textY},
-                             font, 10, {180, 235, 180, 255});
+  Fumbo::Graphic2D::DrawText(monitorB, {textX + 8.0f, textY}, font, 10,
+                             {180, 235, 180, 255});
   textY += 14.0f;
-  Fumbo::Graphic2D::DrawText("SEC-C: 39 C | Hum 12% (WARN)",
-                             {textX + 8.0f, textY}, font, 10,
+  Fumbo::Graphic2D::DrawText(monitorC, {textX + 8.0f, textY}, font, 10,
                              {255, 140, 140, 255});
 }
 
@@ -535,20 +618,23 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
                              {summaryBar.x + 10.0f, summaryBar.y + 10.0f}, font,
                              11, {255, 215, 0, 255});
 
-  std::string totalActions = std::to_string(m_decisionLog.size());
-  std::string budgetSpent = "$" + std::to_string(std::max(0, 50000 - m_budget));
-  std::string trustDelta =
-      (m_publicTrust >= 85) ? "+0" : std::to_string(m_publicTrust - 85);
+  // Read completed shift summaries from backend GameState
+  Game::GameState &gs = m_gameManager.GetGameState();
+  const auto &log = gs.decisionLog;
+
+  std::string totalActions = std::to_string(log.size());
+  int budgetSpentInt = 0;
+  if (!log.empty()) budgetSpentInt = log.back().budgetSpent;
+  std::string budgetSpent = "$" + std::to_string(std::max(0, budgetSpentInt));
+  std::string trustDelta = (m_publicTrust >= 85) ? "+0" : std::to_string(m_publicTrust - 85);
   if (m_publicTrust != 85 && trustDelta[0] != '-') {
     trustDelta = "+" + trustDelta;
   }
-  std::string primaryThreat = "Flood - Sector A";
-  if (!m_decisionLog.empty()) {
-    primaryThreat =
-        m_decisionLog.back().disaster + " - " + m_decisionLog.back().sector;
+  std::string primaryThreat = "No completed shifts";
+  if (!log.empty()) {
+    primaryThreat = "Shift " + std::to_string(log.back().shiftNumber);
   }
-  std::string shiftStatus =
-      m_decisionLog.empty() ? "Awaiting action" : "Review active";
+  std::string shiftStatus = log.empty() ? "No completed shifts" : "Review active";
 
   float colW = (summaryBar.width - 40.0f) / 5.0f;
   float summaryY = summaryBar.y + 30.0f;
@@ -578,20 +664,19 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
                              {timelinePanel.x + 10.0f, timelinePanel.y + 10.0f},
                              font, 11, {0, 230, 118, 255});
 
-  if (m_decisionLog.empty()) {
+  if (log.empty()) {
     Fumbo::Graphic2D::DrawText(
-        "No decisions recorded yet.",
+        "No completed shifts.",
         {timelinePanel.x + 12.0f, timelinePanel.y + 42.0f}, font, 10,
         {140, 140, 160, 255});
     Fumbo::Graphic2D::DrawText(
-        "Queue actions in the Mitigation Hub and lock the shift to populate "
-        "this log.",
+        "Complete a shift to generate a summary here.",
         {timelinePanel.x + 12.0f, timelinePanel.y + 60.0f}, font, 9,
         {110, 110, 135, 255});
   } else {
     float wheel = GetMouseWheelMove();
     if (wheel != 0.0f) {
-      int maxScroll = std::max(0, static_cast<int>(m_decisionLog.size()) - 6);
+      int maxScroll = std::max(0, static_cast<int>(log.size()) - 6);
       m_decisionLogScroll =
           std::clamp(m_decisionLogScroll + (wheel > 0 ? -1 : 1), 0, maxScroll);
     }
@@ -600,10 +685,10 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
     int visibleRows = 6;
     for (int i = 0; i < visibleRows; i++) {
       int index = m_decisionLogScroll + i;
-      if (index >= static_cast<int>(m_decisionLog.size()))
+      if (index >= static_cast<int>(log.size()))
         break;
 
-      const DecisionLogEntry &entry = m_decisionLog[index];
+      const Game::GameState::ShiftSummary &entry = log[index];
       Rectangle rowRect = {timelinePanel.x + 8.0f, rowY + i * 42.0f,
                            timelinePanel.width - 16.0f, 34.0f};
       bool hovered = CheckCollisionPointRec(mouse, rowRect);
@@ -618,24 +703,26 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
       Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(rowRect, 0.05f, 4, 1.0f,
                                                     borderColor);
 
-      Fumbo::Graphic2D::DrawText(entry.timestamp,
+      // Shift number
+      Fumbo::Graphic2D::DrawText(std::to_string(entry.shiftNumber),
                                  {rowRect.x + 8.0f, rowRect.y + 8.0f}, font, 9,
                                  {255, 215, 0, 255});
       Fumbo::Graphic2D::DrawText(
-          entry.title, {rowRect.x + 58.0f, rowRect.y + 8.0f}, font, 9, WHITE);
-      Fumbo::Graphic2D::DrawText(entry.disaster + " - " + entry.sector,
+          std::string("Shift Summary"), {rowRect.x + 58.0f, rowRect.y + 8.0f}, font, 9, WHITE);
+      Fumbo::Graphic2D::DrawText(std::to_string(entry.peopleSaved) + " saved",
                                  {rowRect.x + 58.0f, rowRect.y + 18.0f}, font,
                                  8, {150, 150, 170, 255});
 
-      Color statusColor = {0, 230, 118, 255};
-      if (entry.status == "Pending")
-        statusColor = {255, 145, 0, 255};
-      else if (entry.status == "Failed")
-        statusColor = {255, 23, 68, 255};
+      // Rating badge
       Rectangle badgeRect = {rowRect.x + rowRect.width - 64.0f,
                              rowRect.y + 8.0f, 56.0f, 16.0f};
-      Fumbo::Graphic2D::DrawRectangleRounded(badgeRect, 0.2f, 4, statusColor);
-      Fumbo::Graphic2D::DrawText(entry.status,
+      Color ratingColor = {255, 23, 68, 255};
+      if (entry.overallRating >= 4.0f) ratingColor = {0, 230, 118, 255};
+      else if (entry.overallRating >= 2.0f) ratingColor = {255, 215, 0, 255};
+      Fumbo::Graphic2D::DrawRectangleRounded(badgeRect, 0.2f, 4, ratingColor);
+      char ratingBuf[8];
+      std::snprintf(ratingBuf, sizeof(ratingBuf), "%.1f/5", entry.overallRating);
+      Fumbo::Graphic2D::DrawText(std::string(ratingBuf),
                                  {badgeRect.x + 8.0f, badgeRect.y + 3.0f}, font,
                                  8, WHITE);
 
@@ -659,29 +746,37 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
                              {detailPanel.x + 10.0f, detailPanel.y + 10.0f},
                              font, 11, {255, 215, 0, 255});
 
-  if (m_decisionLog.empty() || m_selectedDecisionLogEntry < 0 ||
-      m_selectedDecisionLogEntry >= static_cast<int>(m_decisionLog.size())) {
-    Fumbo::Graphic2D::DrawText("Select a log entry to inspect its details.",
+  if (log.empty() || m_selectedDecisionLogEntry < 0 ||
+      m_selectedDecisionLogEntry >= static_cast<int>(log.size())) {
+    Fumbo::Graphic2D::DrawText("Select a completed shift to inspect its details.",
                                {detailPanel.x + 12.0f, detailPanel.y + 42.0f},
                                font, 10, {140, 140, 160, 255});
   } else {
-    const DecisionLogEntry &entry = m_decisionLog[m_selectedDecisionLogEntry];
+    const Game::GameState::ShiftSummary &entry = log[m_selectedDecisionLogEntry];
     float dy = detailPanel.y + 40.0f;
     auto DrawDetailRow = [&](const std::string &label,
                              const std::string &value) {
       Fumbo::Graphic2D::DrawText(label, {detailPanel.x + 12.0f, dy}, font, 9,
                                  {150, 150, 170, 255});
-      Fumbo::Graphic2D::DrawText(value, {detailPanel.x + 140.0f, dy}, font, 9,
+      Fumbo::Graphic2D::DrawText(value, {detailPanel.x + 180.0f, dy}, font, 9,
                                  {220, 220, 235, 255});
       dy += 18.0f;
     };
 
-    DrawDetailRow("Action Name", entry.title);
-    DrawDetailRow("Time Executed", entry.timestamp);
-    DrawDetailRow("Disaster Type", entry.disaster);
-    DrawDetailRow("Affected Sector", entry.sector);
-    DrawDetailRow("Estimated Cost", entry.cost);
-    DrawDetailRow("Outcome / Status", entry.status + " - " + entry.outcome);
+    DrawDetailRow("Shift", std::to_string(entry.shiftNumber));
+    DrawDetailRow("Overall Rating", std::to_string(entry.overallRating));
+    DrawDetailRow("People Saved", std::to_string(entry.peopleSaved));
+    DrawDetailRow("Casualties", std::to_string(entry.casualties));
+    DrawDetailRow("Budget Spent", std::string("$") + std::to_string(entry.budgetSpent));
+    DrawDetailRow("Public Trust", std::to_string(entry.publicTrust) + "%");
+    if (!entry.actionsTaken.empty()) {
+      std::string actions;
+      for (const auto &a : entry.actionsTaken) {
+        if (!actions.empty()) actions += ", ";
+        actions += a;
+      }
+      DrawDetailRow("Actions", actions);
+    }
   }
 }
 
@@ -698,92 +793,76 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
     std::string summary;
     std::string fullText;
     Color priorityColor;
+    bool unread;
   };
 
-  static CommsCard cards[6] = {
-      {"BREAKING NEWS",
-       "[!]",
-       "CRITICAL FAILURE: SECTOR ALPHA FLOODGATE ACTUATORS JAMMED",
-       "10:14 AM",
-       "CRITICAL",
-       "Reservoir levels are rising at 0.5m/hr with storm systems approaching. "
-       "Manual override controls are unresponsive.",
-       "A mechanical jam has occurred in the primary hydraulic pistons of Dam "
-       "Floodgate A in Sector Alpha. Maintenance engineers are locked out of "
-       "the control room due to localized flash flooding blocking the access "
-       "road. Remote commands from the Mitigation Hub have failed. Current "
-       "predictions estimate reservoir breach in 4 hours if actuators remain "
-       "jammed. Heavy rainfall upstream continues.",
-       {255, 23, 68, 255}},
-      {"WEATHER UPDATE",
-       "[W]",
-       "Severe Storm Advisory Upgraded to Level 4",
-       "10:02 AM",
-       "HIGH",
-       "Meteorological radar confirms high precipitation intensity band "
-       "heading northeast. 120mm rainfall expected.",
-       "The National Weather Service has raised the local weather warning to "
-       "Level 4 (Severe Storm). Active precipitation levels are exceeding "
-       "models. Low-lying zones in Sector Alpha and adjacent riverbanks are "
-       "expected to experience rapid inundation within the hour. Strong winds "
-       "up to 45 knots may hinder deployment of drone sensors.",
-       {255, 145, 0, 255}},
-      {"CITIZEN REPORT",
-       "[C]",
-       "Reports of Mud Slurry on West Highway",
-       "09:45 AM",
-       "MEDIUM",
-       "Multiple commuters report mud and small boulders rolling down the "
-       "slope of Sector Beta ridge. Patrol dispatched.",
-       "Emergency dispatcher received multiple calls from citizens driving on "
-       "Route 9-West in Sector Beta. Drivers report mud, branches, and small "
-       "rocks spilling across the lanes. Local authorities are setting up "
-       "temporary caution signage. Geological sensor logs indicate ground "
-       "movement risk is elevated. Commuters advise seeking alternate routes.",
-       {255, 215, 0, 255}},
-      {"CCTV / SENSOR",
-       "[S]",
-       "Seismic Station 04 Lost Power & Data Stream",
-       "09:30 AM",
-       "MEDIUM",
-       "Sensor telemetry disconnected suddenly. Backup battery systems show "
-       "offline. Fault code: ERR_COMM_OUT.",
-       "Seismic Monitor Station 04, located on the northern slope of Mount "
-       "Vesuvius Sector B, has ceased broadcasting. Telemetry showed a sudden "
-       "voltage drop followed by complete signal loss. Inspection team cannot "
-       "confirm if this is a physical sensor damage or power circuit failure. "
-       "Seismic data from surrounding stations is still normal.",
-       {255, 215, 0, 255}},
-      {"RESCUE REPORT",
-       "[R]",
-       "Team 02 Pre-positioned in Zone B Standby",
-       "09:15 AM",
-       "LOW",
-       "All primary search and rescue assets, including heavy trucks and "
-       "zodiacs, are stationed at checkpoint Alpha-2.",
-       "Disaster response team 02 is fully mobilized. All equipment checkouts "
-       "are complete. Personnel are currently standing by at sector staging "
-       "checkpoint Alpha-2. Vehicles are fueled and communication links to "
-       "Mitigation Hub are verified active. Standard response time to any "
-       "sector is estimated at 12-18 minutes.",
-       {0, 230, 118, 255}},
-      {"INFRASTRUCTURE",
-       "[I]",
-       "Sector C Bridge Structural Stress Alarm",
-       "08:50 AM",
-       "HIGH",
-       "Vibration analysis telemetry indicates safety limit thresholds "
-       "exceeded. Speed restrictions recommended.",
-       "The structural health monitoring system on the Sector C main bridge "
-       "has issued an automated stress warning. Continuous load from "
-       "evacuating traffic and structural vibration from nearby seismic "
-       "micro-tremors are accumulating. Engineering recommends immediately "
-       "imposing a 5-ton load limit and speed caps.",
-       {255, 145, 0, 255}}};
+  // Helper to map ReportPriority to string and color
+  auto PriorityToString = [](Game::ReportPriority p) {
+    switch (p) {
+    case Game::ReportPriority::Info:
+      return std::pair<std::string, Color>("LOW", Color{0, 230, 118, 255});
+    case Game::ReportPriority::Medium:
+      return std::pair<std::string, Color>("MEDIUM", Color{255, 215, 0, 255});
+    case Game::ReportPriority::High:
+      return std::pair<std::string, Color>("HIGH", Color{255, 145, 0, 255});
+    case Game::ReportPriority::Critical:
+    default:
+      return std::pair<std::string, Color>("CRITICAL", Color{255, 23, 68, 255});
+    }
+  };
+
+  // Read current comms from backend
+  const Game::CommsState &comms = m_gameManager.GetCurrentComms();
+
+  CommsCard cards[6];
+  // 0: BreakingNews
+  {
+    auto pr = PriorityToString(comms.breakingNews.priority);
+    cards[0] = {"BREAKING NEWS", "[!]", comms.breakingNews.title,
+                comms.breakingNews.timestamp, pr.first, comms.breakingNews.preview,
+                comms.breakingNews.fullReport, pr.second, comms.breakingNews.unread};
+  }
+  // 1: Weather
+  {
+    auto pr = PriorityToString(comms.weather.priority);
+    cards[1] = {"WEATHER UPDATE", "[W]", comms.weather.title,
+                comms.weather.timestamp, pr.first, comms.weather.preview,
+                comms.weather.fullReport, pr.second, comms.weather.unread};
+  }
+  // 2: Citizen
+  {
+    auto pr = PriorityToString(comms.citizen.priority);
+    cards[2] = {"CITIZEN REPORT", "[C]", comms.citizen.title,
+                comms.citizen.timestamp, pr.first, comms.citizen.preview,
+                comms.citizen.fullReport, pr.second, comms.citizen.unread};
+  }
+  // 3: Sensor
+  {
+    auto pr = PriorityToString(comms.sensor.priority);
+    cards[3] = {"CCTV / SENSOR", "[S]", comms.sensor.title,
+                comms.sensor.timestamp, pr.first, comms.sensor.preview,
+                comms.sensor.fullReport, pr.second, comms.sensor.unread};
+  }
+  // 4: Rescue
+  {
+    auto pr = PriorityToString(comms.rescue.priority);
+    cards[4] = {"RESCUE REPORT", "[R]", comms.rescue.title,
+                comms.rescue.timestamp, pr.first, comms.rescue.preview,
+                comms.rescue.fullReport, pr.second, comms.rescue.unread};
+  }
+  // 5: Infrastructure
+  {
+    auto pr = PriorityToString(comms.infrastructure.priority);
+    cards[5] = {"INFRASTRUCTURE", "[I]", comms.infrastructure.title,
+                comms.infrastructure.timestamp, pr.first,
+                comms.infrastructure.preview, comms.infrastructure.fullReport,
+                pr.second, comms.infrastructure.unread};
+  }
 
   float padding = 12.0f;
   float gap = 10.0f;
   Font font = GetFontDefault();
+  std::string currentTime = GetCurrentTimeLabel();
 
   // Grid calculation split
   float leftW = (area.width - 3.0f * padding) * 0.48f;
@@ -842,10 +921,10 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
     }
     Fumbo::Graphic2D::DrawText(headline, {x, y}, font, titleSize, WHITE);
 
-    // Timestamp
+    // Timestamp (from backend)
     y += isFeatured ? 20.0f : 15.0f;
-    Fumbo::Graphic2D::DrawText("RECEIVED: " + cards[index].timestamp, {x, y},
-                               font, 8, {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText(std::string("RECEIVED: ") + cards[index].timestamp, {x, y}, font, 8,
+                   {140, 140, 160, 255});
 
     // Divider line
     y += isFeatured ? 15.0f : 12.0f;
@@ -958,11 +1037,11 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
     Fumbo::Graphic2D::DrawText(cards[s_selectedCommsCard].headline, {mx, my},
                                font, 13, WHITE);
 
-    // Classification stamp
+    // Classification stamp with backend timestamp
     my += 20.0f;
-    Fumbo::Graphic2D::DrawText("TIME: " + cards[s_selectedCommsCard].timestamp +
-                                   "  |  STATUS: CLASSIFIED INTEL",
-                               {mx, my}, font, 9, {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText(std::string("TIME: ") + cards[s_selectedCommsCard].timestamp +
+                     "  |  STATUS: CLASSIFIED INTEL",
+                   {mx, my}, font, 9, {140, 140, 160, 255});
 
     // Divider
     my += 16.0f;
@@ -1073,6 +1152,17 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
        {"Deploy Medical Teams", "--", "++", "Rapid response ready",
         "Teams committed"}}};
 
+  Fumbo::Graphic2D::DrawText("SHIFT " + std::to_string(m_shiftNumber),
+                             {area.x + padding, area.y + padding + 2.0f}, font,
+                             10, {255, 215, 0, 255});
+  Fumbo::Graphic2D::DrawText("TIME: " + GetCurrentTimeLabel(),
+                             {area.x + padding + 90.0f, area.y + padding + 2.0f},
+                             font, 10, {0, 230, 118, 255});
+  std::string progressText = "WINDOW " + std::to_string(m_currentTimeWindowIndex + 1) + " / 4";
+  Fumbo::Graphic2D::DrawText(progressText,
+                             {area.x + padding + 210.0f, area.y + padding + 2.0f},
+                             font, 10, {140, 180, 255, 255});
+
   // ========== 1. RESOURCE OVERVIEW BAR ==========
   float barH = 34.0f;
   Rectangle resBar = {area.x + padding, area.y + padding,
@@ -1097,8 +1187,15 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
 
   Fumbo::Graphic2D::DrawText("RESCUE TEAMS:", {rx + 2 * colSpacing, ry}, font,
                              9, {150, 150, 170, 255});
-  Fumbo::Graphic2D::DrawText("3 AVAILABLE", {rx + 2 * colSpacing + 95.0f, ry},
-                             font, 10, {140, 180, 255, 255});
+  // Live values from backend GameState
+  {
+    Game::GameState &gs = m_gameManager.GetGameState();
+    Fumbo::Graphic2D::DrawText(std::string("$") + std::to_string(gs.budget), {rx + 55.0f, ry}, font, 10,
+                               {140, 255, 140, 255});
+    Fumbo::Graphic2D::DrawText(std::to_string(gs.publicTrust) + "%", {rx + colSpacing + 90.0f, ry}, font, 10,
+                               {0, 230, 118, 255});
+    Fumbo::Graphic2D::DrawText(std::to_string(gs.rescueTeams) + " AVAILABLE", {rx + 2 * colSpacing + 95.0f, ry}, font, 10, {140, 180, 255, 255});
+  }
 
   // ========== 2. DISASTER TABS ==========
   float tabY = area.y + padding + barH + 10.0f;
@@ -1159,10 +1256,45 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
   float actionH = 30.0f;
   float actionGap = 4.0f;
 
+  // Helper mapping from tab/action index -> Game::ActionID (available to the whole function)
+  auto getActionId = [](int tabIdx, int actionIdx) -> Game::ActionID {
+    using Game::ActionID;
+    if (tabIdx == 0) {
+      switch (actionIdx) {
+      case 0: return ActionID::IssueWarning;
+      case 1: return ActionID::DeployRescue;
+      case 2: return ActionID::OpenShelter;
+      case 3: return ActionID::CloseRoad;
+      case 4: return ActionID::EvacuateResidents;
+      }
+    } else if (tabIdx == 1) {
+      switch (actionIdx) {
+      case 0: return ActionID::IssueWarning;
+      case 1: return ActionID::DeployRescue;
+      case 2: return ActionID::RequestAirSupport;
+      case 3: return ActionID::EvacuateResidents;
+      case 4: return ActionID::CloseRoad;
+      }
+    } else {
+      switch (actionIdx) {
+      case 0: return ActionID::IssueWarning;
+      case 1: return ActionID::EvacuateResidents;
+      case 2: return ActionID::CloseRoad;
+      case 3: return ActionID::OpenShelter;
+      case 4: return ActionID::DeployRescue;
+      }
+    }
+    return ActionID::IssueWarning;
+  };
+
   for (int i = 0; i < 5; i++) {
     Rectangle actionRect = {leftX + 6.0f, actionY, leftW - 12.0f, actionH};
     bool hovered = CheckCollisionPointRec(mouse, actionRect);
-    bool queued = s_queuedActions[tab][i];
+    // Determine if this action is currently selected in GameState
+    Game::GameState &gs = m_gameManager.GetGameState();
+
+    Game::ActionID aid = getActionId(tab, i);
+    bool queued = (std::find(gs.selectedActions.begin(), gs.selectedActions.end(), aid) != gs.selectedActions.end());
 
     Color bg =
         queued ? Color{25, 50, 35, 255}
@@ -1196,9 +1328,14 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
         costStr, {actionRect.x + actionRect.width - 90.0f, actionRect.y + 8.0f},
         font, 9, {255, 140, 140, 255});
 
-    // Toggle on click
+    // Toggle on click: add/remove ActionID from GameState.selectedActions
     if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-      s_queuedActions[tab][i] = !s_queuedActions[tab][i];
+      auto it = std::find(gs.selectedActions.begin(), gs.selectedActions.end(), aid);
+      if (it != gs.selectedActions.end()) {
+        gs.selectedActions.erase(it);
+      } else {
+        gs.selectedActions.push_back(aid);
+      }
     }
 
     if (hovered) {
@@ -1283,25 +1420,25 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
   float queueY = qDivY + 8.0f;
   int queueCount = 0;
 
+  // Build queue view from GameState.selectedActions
+  Game::GameState &gsQueue = m_gameManager.GetGameState();
   for (int t = 0; t < 3; t++) {
-    bool hasItemsInTab = false;
+    // collect actions for this tab
+    std::vector<int> actionsInTab;
     for (int a = 0; a < 5; a++) {
-      if (s_queuedActions[t][a])
-        hasItemsInTab = true;
+      Game::ActionID aid = getActionId(t, a);
+      if (std::find(gsQueue.selectedActions.begin(), gsQueue.selectedActions.end(), aid) != gsQueue.selectedActions.end()) {
+        actionsInTab.push_back(a);
+      }
     }
-    if (!hasItemsInTab)
-      continue;
+    if (actionsInTab.empty()) continue;
 
     // Tab section label
     std::string secLabel = std::string("[") + tabIcons[t] + "] " + tabNames[t];
-    Fumbo::Graphic2D::DrawText(secLabel, {rightX + 12.0f, queueY}, font, 9,
-                               tabColors[t]);
+    Fumbo::Graphic2D::DrawText(secLabel, {rightX + 12.0f, queueY}, font, 9, tabColors[t]);
     queueY += 16.0f;
 
-    for (int a = 0; a < 5; a++) {
-      if (!s_queuedActions[t][a])
-        continue;
-
+    for (int idx : actionsInTab) {
       Rectangle qItemRect = {rightX + 8.0f, queueY, rightW - 16.0f, 24.0f};
       bool qHovered = CheckCollisionPointRec(mouse, qItemRect);
 
@@ -1309,27 +1446,24 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
       Fumbo::Graphic2D::DrawRectangleRounded(qItemRect, 0.06f, 4, qBg);
 
       // Colored left accent
-      Rectangle accent = {qItemRect.x, qItemRect.y + 2.0f, 3.0f,
-                          qItemRect.height - 4.0f};
+      Rectangle accent = {qItemRect.x, qItemRect.y + 2.0f, 3.0f, qItemRect.height - 4.0f};
       Fumbo::Graphic2D::DrawRectangleRec(accent, tabColors[t]);
 
       // Action name
-      std::string aName = actions[t][a].name;
-      if (aName.length() > 24)
-        aName = aName.substr(0, 21) + "...";
-      Fumbo::Graphic2D::DrawText(aName,
-                                 {qItemRect.x + 10.0f, qItemRect.y + 6.0f},
-                                 font, 9, {210, 210, 230, 255});
+      std::string aName = actions[t][idx].name;
+      if (aName.length() > 24) aName = aName.substr(0, 21) + "...";
+      Fumbo::Graphic2D::DrawText(aName, {qItemRect.x + 10.0f, qItemRect.y + 6.0f}, font, 9, {210, 210, 230, 255});
 
       // Remove button
       float removeX = qItemRect.x + qItemRect.width - 26.0f;
-      Color removeColor =
-          qHovered ? Color{255, 80, 80, 255} : Color{120, 120, 150, 255};
-      Fumbo::Graphic2D::DrawText("[X]", {removeX, qItemRect.y + 6.0f}, font, 9,
-                                 removeColor);
+      Color removeColor = qHovered ? Color{255, 80, 80, 255} : Color{120, 120, 150, 255};
+      Fumbo::Graphic2D::DrawText("[X]", {removeX, qItemRect.y + 6.0f}, font, 9, removeColor);
 
       if (qHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-        s_queuedActions[t][a] = false;
+        // remove from GameState.selectedActions
+        Game::ActionID aid = getActionId(t, idx);
+        auto it = std::find(gsQueue.selectedActions.begin(), gsQueue.selectedActions.end(), aid);
+        if (it != gsQueue.selectedActions.end()) gsQueue.selectedActions.erase(it);
       }
 
       queueY += 28.0f;
@@ -1357,16 +1491,21 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                       btnH};
   bool endHovered = CheckCollisionPointRec(mouse, endBtn);
 
-  Color endBg = (queueCount > 0) ? (endHovered ? Color{200, 40, 40, 255}
-                                               : Color{160, 25, 25, 255})
-                                 : Color{50, 50, 60, 255};
+  bool canAdvance = queueCount > 0;
+  std::string buttonLabel = (m_currentTimeWindowIndex < 3)
+                                ? "EXECUTE PLAN & ADVANCE TIME"
+                                : "COMPLETE SHIFT";
+
+  Color endBg = (canAdvance)
+                    ? (endHovered ? Color{200, 40, 40, 255} : Color{160, 25, 25, 255})
+                    : Color{50, 50, 60, 255};
   Fumbo::Graphic2D::DrawRectangleRounded(endBtn, 0.1f, 4, endBg);
   Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
       endBtn, 0.1f, 4, 1.2f,
-      queueCount > 0 ? Color{255, 80, 80, 255} : Color{70, 70, 85, 255});
+      canAdvance ? Color{255, 80, 80, 255} : Color{70, 70, 85, 255});
 
-  Color btnTextColor = queueCount > 0 ? WHITE : Color{100, 100, 110, 255};
-  Fumbo::Graphic2D::DrawText("LOCK DECISIONS & END SHIFT",
+  Color btnTextColor = canAdvance ? WHITE : Color{100, 100, 110, 255};
+  Fumbo::Graphic2D::DrawText(buttonLabel,
                              {endBtn.x + 12.0f, endBtn.y + 10.0f}, font, 10,
                              btnTextColor);
 
@@ -1378,7 +1517,97 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                                font, 10, {255, 215, 0, 255});
   }
 
-  if (s_showEndShiftConfirm && queueCount > 0) {
+  if (m_shiftSummaryVisible) {
+    Fumbo::Graphic2D::DrawRectangleRec(area, {8, 10, 16, 230});
+    Rectangle summaryRect = {area.x + 24.0f, area.y + 24.0f, area.width - 48.0f,
+                             area.height - 48.0f};
+    Fumbo::Graphic2D::DrawRectangleRounded(summaryRect, 0.03f, 4,
+                                           {20, 24, 33, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(summaryRect, 0.03f, 4, 1.2f,
+                                                  {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText("SHIFT SUMMARY",
+                               {summaryRect.x + 16.0f, summaryRect.y + 16.0f}, font,
+                               13, {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText("Operational performance snapshot",
+                               {summaryRect.x + 16.0f, summaryRect.y + 38.0f}, font,
+                               10, {180, 180, 210, 255});
+
+    std::string stats[][2] = {{"Lives Saved", "142"}, {"Casualties", "8"},
+                              {"Infrastructure Damage", "24%"},
+                              {"Budget Remaining", "$27,500"},
+                              {"Public Trust Change", "+6%"},
+                              {"Overall Rating", "4.2/5"}};
+    float statY = summaryRect.y + 70.0f;
+    for (int i = 0; i < 6; i++) {
+      Fumbo::Graphic2D::DrawText(stats[i][0], {summaryRect.x + 16.0f, statY + i * 22.0f}, font, 10,
+                                 {220, 220, 235, 255});
+      Fumbo::Graphic2D::DrawText(stats[i][1], {summaryRect.x + summaryRect.width - 120.0f, statY + i * 22.0f}, font, 10,
+                                 {0, 230, 118, 255});
+    }
+
+    Fumbo::Graphic2D::DrawText(
+        "A family made it home tonight, but eight others were lost to the storm's delay.",
+        {summaryRect.x + 16.0f, summaryRect.y + summaryRect.height - 86.0f}, font,
+        10, {255, 180, 120, 255});
+    Fumbo::Graphic2D::DrawText(
+        "The city will remember who acted fast, and who hesitated too long.",
+        {summaryRect.x + 16.0f, summaryRect.y + summaryRect.height - 66.0f}, font,
+        10, {255, 120, 120, 255});
+
+    Rectangle closeBtn = {summaryRect.x + summaryRect.width - 104.0f,
+                          summaryRect.y + summaryRect.height - 40.0f, 88.0f,
+                          24.0f};
+    bool closeHovered = CheckCollisionPointRec(mouse, closeBtn);
+    Fumbo::Graphic2D::DrawRectangleRounded(closeBtn, 0.1f, 4, closeHovered ? Color{80, 80, 95, 255} : Color{50, 55, 70, 255});
+    Fumbo::Graphic2D::DrawText("CONTINUE", {closeBtn.x + 20.0f, closeBtn.y + 6.0f}, font, 9, WHITE);
+
+    if (closeHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      m_shiftSummaryVisible = false;
+      m_shiftBriefingVisible = true;
+      m_shiftNumber++;
+      m_currentTimeWindowIndex = 0;
+      m_currentTimeLabel = "08:00";
+      m_cityStatus = "ALERT";
+      for (int t = 0; t < 3; t++)
+        for (int a = 0; a < 5; a++)
+          s_queuedActions[t][a] = false;
+    }
+  } else if (m_shiftBriefingVisible) {
+    Fumbo::Graphic2D::DrawRectangleRec(area, {8, 10, 16, 230});
+    Rectangle briefingRect = {area.x + 24.0f, area.y + 24.0f, area.width - 48.0f,
+                              area.height - 48.0f};
+    Fumbo::Graphic2D::DrawRectangleRounded(briefingRect, 0.03f, 4,
+                                           {20, 24, 33, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(briefingRect, 0.03f, 4, 1.2f,
+                                                  {0, 230, 118, 255});
+    Fumbo::Graphic2D::DrawText("OPERATIONAL BRIEFING",
+                               {briefingRect.x + 16.0f, briefingRect.y + 16.0f}, font,
+                               13, {0, 230, 118, 255});
+    Fumbo::Graphic2D::DrawText("Next shift readiness update",
+                               {briefingRect.x + 16.0f, briefingRect.y + 38.0f}, font,
+                               10, {180, 180, 210, 255});
+    Fumbo::Graphic2D::DrawText("- Recheck sensor calibration before dispatch.",
+                               {briefingRect.x + 16.0f, briefingRect.y + 70.0f}, font,
+                               10, {220, 220, 235, 255});
+    Fumbo::Graphic2D::DrawText("- Prepare shelter and communications routes.",
+                               {briefingRect.x + 16.0f, briefingRect.y + 92.0f}, font,
+                               10, {220, 220, 235, 255});
+    Fumbo::Graphic2D::DrawText("- Maintain public trust with clear updates.",
+                               {briefingRect.x + 16.0f, briefingRect.y + 114.0f}, font,
+                               10, {220, 220, 235, 255});
+
+    Rectangle continueBtn = {briefingRect.x + briefingRect.width - 104.0f,
+                             briefingRect.y + briefingRect.height - 40.0f, 88.0f,
+                             24.0f};
+    bool continueHovered = CheckCollisionPointRec(mouse, continueBtn);
+    Fumbo::Graphic2D::DrawRectangleRounded(continueBtn, 0.1f, 4, continueHovered ? Color{80, 120, 90, 255} : Color{50, 90, 60, 255});
+    Fumbo::Graphic2D::DrawText("RETURN", {continueBtn.x + 24.0f, continueBtn.y + 6.0f}, font, 9, WHITE);
+
+    if (continueHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      m_shiftBriefingVisible = false;
+      m_desktop->Notify("Operations", "Shift " + std::to_string(m_shiftNumber) + " briefing complete.");
+    }
+  } else if (s_showEndShiftConfirm && canAdvance) {
     Fumbo::Graphic2D::DrawRectangleRec(area, {12, 14, 21, 220});
     Rectangle modalRect = {area.x + 70.0f, area.y + 70.0f, area.width - 140.0f,
                            area.height - 140.0f};
@@ -1387,16 +1616,16 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(modalRect, 0.04f, 4, 1.2f,
                                                   {255, 80, 80, 255});
 
-    Fumbo::Graphic2D::DrawText("END SHIFT CONFIRMATION",
+    std::string confirmTitle = (m_currentTimeWindowIndex < 3) ? "ADVANCE TIME WINDOW" : "COMPLETE SHIFT";
+    std::string confirmText = (m_currentTimeWindowIndex < 3)
+                                  ? "Execute the queued actions and advance to the next operational window?"
+                                  : "Complete the shift and review the summary?";
+    Fumbo::Graphic2D::DrawText(confirmTitle,
                                {modalRect.x + 16.0f, modalRect.y + 16.0f}, font,
                                11, {255, 215, 0, 255});
-    Fumbo::Graphic2D::DrawText(
-        "Lock the current decisions and submit them to the shift audit trail?",
-        {modalRect.x + 16.0f, modalRect.y + 48.0f}, font, 10,
-        {220, 220, 235, 255});
-    Fumbo::Graphic2D::DrawText("This action cannot be edited once confirmed.",
-                               {modalRect.x + 16.0f, modalRect.y + 68.0f}, font,
-                               9, {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText(confirmText,
+                               {modalRect.x + 16.0f, modalRect.y + 48.0f}, font,
+                               10, {220, 220, 235, 255});
 
     Rectangle confirmBtn = {modalRect.x + 16.0f,
                             modalRect.y + modalRect.height - 44.0f, 92.0f,
@@ -1420,33 +1649,73 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
         "CANCEL", {cancelBtn.x + 24.0f, cancelBtn.y + 8.0f}, font, 9, WHITE);
 
     if (confirmHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      // Create decision log entries from the current selected actions
+      Game::GameState &gsConfirm = m_gameManager.GetGameState();
       for (int t = 0; t < 3; t++) {
         for (int a = 0; a < 5; a++) {
-          if (!s_queuedActions[t][a])
+          Game::ActionID aid = getActionId(t, a);
+          if (std::find(gsConfirm.selectedActions.begin(), gsConfirm.selectedActions.end(), aid) == gsConfirm.selectedActions.end())
             continue;
-          std::string disaster =
-              (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
-          std::string sector =
-              (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
-          AddDecisionLogEntry(
-              actions[t][a].name, disaster, sector, "Completed",
-              (std::string(actions[t][a].budgetImpact) == "---" ||
-                       std::string(actions[t][a].budgetImpact) == "--" ||
-                       std::string(actions[t][a].budgetImpact) == "-"
-                   ? "$5,000"
-                   : "$10,000"),
-              "Action executed during the shift");
+          std::string disaster = (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
+          std::string sector = (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
+          AddDecisionLogEntry(actions[t][a].name, disaster, sector, "Completed",
+                             (std::string(actions[t][a].budgetImpact) == "---" || std::string(actions[t][a].budgetImpact) == "--" || std::string(actions[t][a].budgetImpact) == "-" ? "$5,000" : "$10,000"),
+                             "Action executed during the shift");
         }
       }
-      for (int t = 0; t < 3; t++)
-        for (int a = 0; a < 5; a++)
-          s_queuedActions[t][a] = false;
+
+      // Execute the simulation turn using the backend Simulation system.
+      // Simulation will process actions, evaluate outcomes, generate comms,
+      // clear selected actions, and advance the GameManager window.
+      {
+        Game::Simulation sim;
+        bool shiftContinues = sim.ExecuteTurn(m_gameManager);
+
+        // Sync UI-level values from backend GameState/GameManager
+        Game::GameState &gs = m_gameManager.GetGameState();
+        m_currentTimeWindowIndex = m_gameManager.GetCurrentWindow();
+        m_currentTimeLabel = std::string(Game::GameState::GetWindowDisplayTime(m_currentTimeWindowIndex));
+        m_budget = gs.budget;
+        m_publicTrust = gs.publicTrust;
+        m_shiftNumber = m_gameManager.GetCurrentShift();
+
+        if (!shiftContinues) {
+          // Shift ended: record a ShiftSummary in GameState.decisionLog and show summary
+          Game::GameState &gsFinal = m_gameManager.GetGameState();
+          Game::GameState::ShiftSummary summary;
+          summary.shiftNumber = gsFinal.currentShift;
+          summary.peopleSaved = gsFinal.peopleSaved;
+          summary.casualties = gsFinal.casualties;
+          summary.budgetSpent = gsFinal.shiftStartingBudget - gsFinal.budget;
+          summary.publicTrust = gsFinal.publicTrust;
+          // Build actionsTaken from the entries we added to the UI decision log earlier
+          for (const auto &entry : m_decisionLog) {
+            summary.actionsTaken.push_back(entry.title);
+          }
+          // Compute a simple overall rating from public trust (normalized)
+          summary.overallRating = std::clamp(gsFinal.publicTrust / 20.0f, 0.0f, 5.0f);
+          gsFinal.decisionLog.push_back(summary);
+          m_shiftSummaryVisible = true;
+        } else {
+          // Shift continues: keep UI in next window. Keep legacy notifications.
+          if (m_currentTimeWindowIndex == 2) {
+            m_desktop->Notify("Threat Center",
+                              "Critical update: conditions are worsening across the city.");
+          } else if (m_currentTimeWindowIndex == 3) {
+            m_desktop->Notify("Threat Center",
+                              "Emergency update: evacuation zones are now active.");
+          } else {
+            m_desktop->Notify("Operations",
+                              "Advance complete. Current time is " + GetCurrentTimeLabel() + ".");
+          }
+        }
+      }
+
       s_showEndShiftConfirm = false;
     } else if (cancelHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       s_showEndShiftConfirm = false;
     }
-  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-             queueCount > 0) {
+  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && canAdvance) {
     s_showEndShiftConfirm = true;
   }
 }
@@ -1473,9 +1742,42 @@ void DemoDesktop::DrawStatusBar() {
     Fumbo::Graphic2D::DrawLineEx({r.x, r.y + r.height - 1.0f}, {r.x + r.width, r.y + r.height - 1.0f}, 1.0f, WHITE);
   };
 
+  // Helper mapping from tab/action index -> Game::ActionID
+  auto getActionId = [](int tabIdx, int actionIdx) -> Game::ActionID {
+    using Game::ActionID;
+    if (tabIdx == 0) {
+      switch (actionIdx) {
+      case 0: return ActionID::IssueWarning;
+      case 1: return ActionID::DeployRescue;
+      case 2: return ActionID::OpenShelter;
+      case 3: return ActionID::CloseRoad;
+      case 4: return ActionID::EvacuateResidents;
+      }
+    } else if (tabIdx == 1) {
+      switch (actionIdx) {
+      case 0: return ActionID::IssueWarning;
+      case 1: return ActionID::DeployRescue;
+      case 2: return ActionID::RequestAirSupport;
+      case 3: return ActionID::EvacuateResidents;
+      case 4: return ActionID::CloseRoad;
+      }
+    } else {
+      switch (actionIdx) {
+      case 0: return ActionID::IssueWarning;
+      case 1: return ActionID::EvacuateResidents;
+      case 2: return ActionID::CloseRoad;
+      case 3: return ActionID::OpenShelter;
+      case 4: return ActionID::DeployRescue;
+      }
+    }
+    return ActionID::IssueWarning;
+  };
+
+  const Game::GameState &gs = m_gameManager.GetGameState();
+
   // 1. Day Counter
   DrawInsetBox({10.0f, 4.0f, 150.0f, 22.0f});
-  std::string dayText = "DAY: " + std::to_string(m_day);
+  std::string dayText = "DAY: " + std::to_string(gs.currentShift);
   Fumbo::Graphic2D::DrawText(dayText, {20.0f, textY}, font, 12, BLACK);
 
   // 2. City Status
@@ -1491,17 +1793,87 @@ void DemoDesktop::DrawStatusBar() {
   // 3. Budget
   DrawInsetBox({580.0f, 4.0f, 320.0f, 22.0f});
   Fumbo::Graphic2D::DrawText("BUDGET: ", {590.0f, textY}, font, 12, BLACK);
-  std::string budgetValText = "$" + std::to_string(m_budget);
+  std::string budgetValText = "$" + std::to_string(gs.budget);
   Fumbo::Graphic2D::DrawText(budgetValText, {660.0f, textY}, font, 12, {0, 128, 0, 255});
 
   // 4. Public Trust
   DrawInsetBox({920.0f, 4.0f, 320.0f, 22.0f});
   Fumbo::Graphic2D::DrawText("PUBLIC TRUST: ", {930.0f, textY}, font, 12, BLACK);
-  std::string trustText = std::to_string(m_publicTrust) + "%";
+  std::string trustText = std::to_string(gs.publicTrust) + "%";
   Color trustColor = {0, 128, 0, 255};
-  if (m_publicTrust < 35)
+  if (gs.publicTrust < 35)
     trustColor = {180, 0, 0, 255};
-  else if (m_publicTrust < 70)
+  else if (gs.publicTrust < 70)
     trustColor = {215, 100, 0, 255};
   Fumbo::Graphic2D::DrawText(trustText, {1040.0f, textY}, font, 12, trustColor);
+
+  // 5. City Status Indicator (Overall Health)
+  // Calculate overall city status from existing GameState values
+  // Formula: Population Safety (40%) + Infrastructure (25%) + Public Trust (20%) + Emergency Capacity (15%)
+  
+  // Population Safety: Based on casualties vs people saved ratio
+  float populationSafety = 100.0f;
+  int totalAffected = gs.peopleSaved + gs.casualties;
+  if (totalAffected > 0) {
+    populationSafety = (static_cast<float>(gs.peopleSaved) / static_cast<float>(totalAffected)) * 100.0f;
+  }
+  
+  // Infrastructure: Inverted damage percentage (100 - damage%)
+  float infrastructureHealth = 100.0f - static_cast<float>(gs.infrastructureDamage);
+  if (infrastructureHealth < 0.0f) infrastructureHealth = 0.0f;
+  
+  // Public Trust: Already 0-100 scale
+  float publicTrustScore = static_cast<float>(gs.publicTrust);
+  
+  // Emergency Capacity: Based on remaining rescue teams and budget
+  float rescueTeamCapacity = (static_cast<float>(gs.rescueTeams) / 3.0f) * 100.0f; // 3 is initial count
+  float budgetCapacity = (static_cast<float>(gs.budget) / 50000.0f) * 100.0f; // 50000 is initial budget
+  float emergencyCapacity = (rescueTeamCapacity + budgetCapacity) / 2.0f;
+  if (emergencyCapacity > 100.0f) emergencyCapacity = 100.0f;
+  
+  // Calculate weighted overall score
+  float overallCityStatus = (populationSafety * 0.40f) + 
+                            (infrastructureHealth * 0.25f) + 
+                            (publicTrustScore * 0.20f) + 
+                            (emergencyCapacity * 0.15f);
+  
+  // Clamp to 0-100 range
+  if (overallCityStatus > 100.0f) overallCityStatus = 100.0f;
+  if (overallCityStatus < 0.0f) overallCityStatus = 0.0f;
+  
+  // Determine status label and color based on percentage
+  std::string statusLabel;
+  Color statusIndicatorColor;
+  
+  if (overallCityStatus >= 80.0f) {
+    statusLabel = "STABLE";
+    statusIndicatorColor = {0, 180, 0, 255}; // Bright green
+  } else if (overallCityStatus >= 60.0f) {
+    statusLabel = "CONCERN";
+    statusIndicatorColor = {215, 170, 0, 255}; // Yellow-orange
+  } else if (overallCityStatus >= 40.0f) {
+    statusLabel = "CRITICAL";
+    statusIndicatorColor = {255, 140, 0, 255}; // Orange
+  } else if (overallCityStatus >= 20.0f) {
+    statusLabel = "EMERGENCY";
+    statusIndicatorColor = {255, 60, 0, 255}; // Red-orange
+  } else {
+    statusLabel = "COLLAPSE";
+    statusIndicatorColor = {200, 0, 0, 255}; // Dark red
+  }
+  
+  // Draw City Status Indicator box (positioned after Public Trust)
+  float cityStatusX = 1260.0f;
+  DrawInsetBox({cityStatusX, 4.0f, 340.0f, 22.0f});
+  
+  // Draw label
+  Fumbo::Graphic2D::DrawText("CITY: ", {cityStatusX + 10.0f, textY}, font, 12, BLACK);
+  
+  // Draw percentage
+  char percentBuf[8];
+  snprintf(percentBuf, sizeof(percentBuf), "%d%%", static_cast<int>(overallCityStatus));
+  Fumbo::Graphic2D::DrawText(percentBuf, {cityStatusX + 50.0f, textY}, font, 12, statusIndicatorColor);
+  
+  // Draw status label
+  Fumbo::Graphic2D::DrawText(" | " + statusLabel, {cityStatusX + 90.0f, textY}, font, 12, statusIndicatorColor);
 }
