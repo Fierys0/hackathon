@@ -1602,7 +1602,17 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
 
       if (m_currentTimeWindowIndex < 3) {
         AdvanceTimeWindow();
-        m_desktop->Notify("Operations", "Advance complete. Current time is " + GetCurrentTimeLabel() + ".");
+        if (m_currentTimeWindowIndex == 2) {
+          m_desktop->Notify("Threat Center",
+                            "Critical update: conditions are worsening across the city.");
+        } else if (m_currentTimeWindowIndex == 3) {
+          m_desktop->Notify("Threat Center",
+                            "Emergency update: evacuation zones are now active.");
+        } else {
+          m_desktop->Notify("Operations",
+                            "Advance complete. Current time is " +
+                                GetCurrentTimeLabel() + ".");
+        }
       } else {
         m_shiftSummaryVisible = true;
       }
