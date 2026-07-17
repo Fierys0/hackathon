@@ -1,6 +1,7 @@
 #pragma once
 #include "../core/os_desktop.hpp"
 #include "fumbo.hpp"
+#include "raylib.h"
 #include <vector>
 
 // DemoDesktop: Demo state showing OS simulation features
@@ -44,19 +45,28 @@ private:
   void DrawStatusBar();
   void AddDecisionLogEntry(const std::string &title,
                            const std::string &disaster,
-                           const std::string &sector,
-                           const std::string &status,
-                           const std::string &cost,
-                           const std::string &outcome);
+                           const std::string &sector, const std::string &status,
+                           const std::string &cost, const std::string &outcome);
 
   // Window content builders
   static void DrawTerminalContent(Rectangle area);
   static void DrawSettingsContent(Rectangle area);
   static void DrawFileManagerContent(Rectangle area);
-  static void DrawNotesContent(Rectangle area);
+  void DrawNotesContent(Rectangle area);
   static void DrawAboutContent(Rectangle area);
   static void DrawThreatCenterContent(Rectangle area);
   static void DrawCommsContent(Rectangle area);
   void DrawMitigationHub(Rectangle area);
   void DrawDecisionLog(Rectangle area);
+
+  // Texture & UI elements
+  Texture2D m_wallpaper;
+  Texture2D m_bgIconTex;
+  Texture2D m_threatIconTex;
+  Texture2D m_commsIconTex;
+  Texture2D m_mitigationIconTex;
+  Texture2D m_bookmarkIconTex;
+
+  Fumbo::UI::Textbox m_notesTextbox;
+  int m_notesWindowId;
 };

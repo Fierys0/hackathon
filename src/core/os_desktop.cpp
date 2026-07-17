@@ -84,11 +84,10 @@ void OSDesktop::DrawClean() {
         m_wallpaper, {0, 0},
         {Fumbo::Utils::UI_WIDTH, Fumbo::Utils::UI_HEIGHT});
   } else {
-    // Default gradient background
-    Fumbo::Graphic2D::DrawRectangleGradientV(
-        0, 0, (int)Fumbo::Utils::UI_WIDTH, (int)Fumbo::Utils::UI_HEIGHT,
-        m_desktopStyle.backgroundColor,
-        {30, 30, 60, 255});
+    // Solid background (Teal)
+    Fumbo::Graphic2D::DrawRectangleRec(
+        {0, 0, Fumbo::Utils::UI_WIDTH, Fumbo::Utils::UI_HEIGHT},
+        m_desktopStyle.backgroundColor);
   }
 }
 
@@ -109,11 +108,16 @@ void OSDesktop::DrawDirty() {
                                              m_desktopStyle.iconSelectedColor);
     }
 
+    // Draw background texture if present
+    if (icon.bgIcon.id != 0) {
+      Fumbo::Graphic2D::DrawTexture(icon.bgIcon, {cx, cy}, {iconSz, iconSz});
+    }
+
     // Icon texture
     if (icon.icon.id != 0) {
       Fumbo::Graphic2D::DrawTexture(icon.icon, {cx, cy}, {iconSz, iconSz});
-    } else {
-      // Default folder-like icon
+    } else if (icon.bgIcon.id == 0) {
+      // Default folder-like icon if both are null
       Fumbo::Graphic2D::DrawRectangleRounded(
           {cx, cy, iconSz, iconSz}, 0.15f, 4,
           {70, 100, 200, 200});
@@ -203,9 +207,15 @@ void OSDesktop::SetNotificationStyle(const NotificationStyle &style) {
 
 void OSDesktop::AddDesktopIcon(const std::string &label, Texture2D icon,
                                std::function<void()> onDoubleClick) {
+  AddDesktopIcon(label, icon, {0}, std::move(onDoubleClick));
+}
+
+void OSDesktop::AddDesktopIcon(const std::string &label, Texture2D icon, Texture2D bgIcon,
+                               std::function<void()> onDoubleClick) {
   DesktopIcon di;
   di.label = label;
   di.icon = icon;
+  di.bgIcon = bgIcon;
   di.onDoubleClick = std::move(onDoubleClick);
   m_icons.push_back(std::move(di));
   ArrangeIcons();
