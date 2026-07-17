@@ -13,6 +13,7 @@ namespace OS {
 struct DesktopIcon {
   std::string label;
   Texture2D icon = {0};
+  Texture2D bgIcon = {0};
   std::function<void()> onDoubleClick;
   Vector2 position = {0, 0};
   bool selected = false;
@@ -20,15 +21,15 @@ struct DesktopIcon {
 
 // Desktop style
 struct DesktopStyle {
-  Color backgroundColor = {18, 18, 30, 255};
-  Color iconTextColor = {230, 230, 250, 255};
-  Color iconTextShadowColor = {0, 0, 0, 180};
-  Color iconSelectedColor = {60, 80, 180, 100};
+  Color backgroundColor = {0, 128, 128, 255}; // Classic Windows 95/98 Teal
+  Color iconTextColor = WHITE;
+  Color iconTextShadowColor = BLACK;
+  Color iconSelectedColor = {0, 0, 128, 100}; // Windows 95/98 dark blue selection outline/tint
   float iconSize = 48.0f;
   float iconSpacingX = 90.0f;
   float iconSpacingY = 90.0f;
   float iconMarginX = 30.0f;
-  float iconMarginY = 20.0f;
+  float iconMarginY = 45.0f; // Shift down to avoid being overdrawn by top bar (height 30.0f)
   int iconFontSize = 11;
   float iconLabelMaxWidth = 80.0f;
 };
@@ -65,6 +66,8 @@ public:
   // Set notification style
   void SetNotificationStyle(const NotificationStyle &style);
   void AddDesktopIcon(const std::string &label, Texture2D icon,
+                      std::function<void()> onDoubleClick);
+  void AddDesktopIcon(const std::string &label, Texture2D icon, Texture2D bgIcon,
                       std::function<void()> onDoubleClick);
 
   void ClearDesktopIcons();

@@ -319,29 +319,43 @@ void OSWindow::Draw() {
     Rectangle shadowRect = {m_bounds.x + m_style.shadowOffset.x,
                             m_bounds.y + m_style.shadowOffset.y,
                             m_bounds.width, m_bounds.height};
-    Fumbo::Graphic2D::DrawRectangleRounded(shadowRect, m_style.cornerRoundness, 6,
-                                           m_style.shadowColor);
+    if (m_style.cornerRoundness > 0.0f) {
+      Fumbo::Graphic2D::DrawRectangleRounded(shadowRect, m_style.cornerRoundness, 6,
+                                             m_style.shadowColor);
+    } else {
+      Fumbo::Graphic2D::DrawRectangleRec(shadowRect, m_style.shadowColor);
+    }
   }
 
-  Fumbo::Graphic2D::DrawRectangleRounded(m_bounds, m_style.cornerRoundness, 6,
-                                         m_style.bodyColor);
+  if (m_style.cornerRoundness > 0.0f) {
+    Fumbo::Graphic2D::DrawRectangleRounded(m_bounds, m_style.cornerRoundness, 6,
+                                           m_style.bodyColor);
 
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
-      m_bounds, m_style.cornerRoundness, 6, m_style.borderThickness,
-      m_focused ? m_style.titleBarFocusedColor : m_style.borderColor);
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
+        m_bounds, m_style.cornerRoundness, 6, m_style.borderThickness,
+        m_style.borderColor);
+  } else {
+    Fumbo::Graphic2D::DrawRectangleRec(m_bounds, m_style.bodyColor);
+
+    Fumbo::Graphic2D::DrawRectangleLinesEx(
+        m_bounds, m_style.borderThickness, m_style.borderColor);
+  }
 
   Rectangle titleBar = GetTitleBarRect();
   Color tbColor =
       m_focused ? m_style.titleBarFocusedColor : m_style.titleBarColor;
 
-  // Draw title bar with rounded top corners only (approximate with full rect +
-  // clip)
-  Fumbo::Graphic2D::DrawRectangleRounded(titleBar, m_style.cornerRoundness * 2, 6,
-                                         tbColor);
-  // Bottom part of title bar (straight edge)
-  Rectangle titleBottom = {titleBar.x, titleBar.y + titleBar.height * 0.5f,
-                           titleBar.width, titleBar.height * 0.5f};
-  Fumbo::Graphic2D::DrawRectangleRec(titleBottom, tbColor);
+  if (m_style.cornerRoundness > 0.0f) {
+    // Draw title bar with rounded top corners only (approximate with full rect + clip)
+    Fumbo::Graphic2D::DrawRectangleRounded(titleBar, m_style.cornerRoundness * 2, 6,
+                                           tbColor);
+    // Bottom part of title bar (straight edge)
+    Rectangle titleBottom = {titleBar.x, titleBar.y + titleBar.height * 0.5f,
+                             titleBar.width, titleBar.height * 0.5f};
+    Fumbo::Graphic2D::DrawRectangleRec(titleBottom, tbColor);
+  } else {
+    Fumbo::Graphic2D::DrawRectangleRec(titleBar, tbColor);
+  }
 
   Fumbo::Graphic2D::DrawLineEx(
       {titleBar.x, titleBar.y + titleBar.height},
@@ -361,34 +375,72 @@ void OSWindow::Draw() {
   Fumbo::Graphic2D::DrawText(m_title, {textStartX, titleY}, m_font,
                              m_style.titleFontSize, m_style.titleTextColor);
 
-  // Close button (red circle)
+  // Helper lambda for drawing classic Win95/98 3D rectangular title buttons
+  auto DrawWin95Button = [&](Rectangle r) {
+    Color btnBg = {192, 192, 192, 255};
+    Fumbo::Graphic2D::DrawRectangleRec(r, btnBg);
+    // Raised borders: top/left is white, bottom/right is dark gray
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x + r.width, r.y}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x, r.y + r.height}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({r.x + r.width - 1, r.y}, {r.x + r.width - 1, r.y + r.height}, 1.0f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y + r.height - 1}, {r.x + r.width, r.y + r.height - 1}, 1.0f, {128, 128, 128, 255});
+  };
+
+  // Close button (X symbol inside 3D button)
   if (m_style.closable) {
     Rectangle cr = GetCloseButtonRect();
-    Color cc = m_closeHover ? m_style.closeButtonHoverColor
-                            : m_style.closeButtonColor;
-    float radius = cr.width * 0.5f;
-    Fumbo::Graphic2D::DrawCircleV(
-        {cr.x + radius, cr.y + radius}, radius, cc);
+    if (m_style.cornerRoundness == 0.0f) {
+      DrawWin95Button(cr);
+      float symbolSize = 10.0f;
+      float startX = cr.x + (cr.width - symbolSize) * 0.5f;
+      float startY = cr.y + (cr.height - symbolSize) * 0.5f;
+      Fumbo::Graphic2D::DrawLineEx({startX, startY}, {startX + symbolSize, startY + symbolSize}, 1.5f, BLACK);
+      Fumbo::Graphic2D::DrawLineEx({startX + symbolSize, startY}, {startX, startY + symbolSize}, 1.5f, BLACK);
+    } else {
+      Color cc = m_closeHover ? m_style.closeButtonHoverColor
+                              : m_style.closeButtonColor;
+      float radius = cr.width * 0.5f;
+      Fumbo::Graphic2D::DrawCircleV(
+          {cr.x + radius, cr.y + radius}, radius, cc);
+    }
   }
 
-  // Maximize button (green circle)
+  // Maximize button (box outline inside 3D button)
   if (m_style.maximizable) {
     Rectangle mr = GetMaxButtonRect();
-    Color mc =
-        m_maxHover ? m_style.maximizeButtonHoverColor : m_style.maximizeButtonColor;
-    float radius = mr.width * 0.5f;
-    Fumbo::Graphic2D::DrawCircleV(
-        {mr.x + radius, mr.y + radius}, radius, mc);
+    if (m_style.cornerRoundness == 0.0f) {
+      DrawWin95Button(mr);
+      float boxW = 9.0f;
+      float boxH = 7.0f;
+      float startX = mr.x + (mr.width - boxW) * 0.5f;
+      float startY = mr.y + (mr.height - boxH) * 0.5f;
+      Fumbo::Graphic2D::DrawRectangleLinesEx({startX, startY, boxW, boxH}, 1.5f, BLACK);
+      Fumbo::Graphic2D::DrawLineEx({startX, startY + 0.5f}, {startX + boxW, startY + 0.5f}, 2.0f, BLACK);
+    } else {
+      Color mc =
+          m_maxHover ? m_style.maximizeButtonHoverColor : m_style.maximizeButtonColor;
+      float radius = mr.width * 0.5f;
+      Fumbo::Graphic2D::DrawCircleV(
+          {mr.x + radius, mr.y + radius}, radius, mc);
+    }
   }
 
-  // Minimize button (yellow circle)
+  // Minimize button (bottom line inside 3D button)
   if (m_style.minimizable) {
     Rectangle minR = GetMinButtonRect();
-    Color minC = m_minHover ? m_style.minimizeButtonHoverColor
-                            : m_style.minimizeButtonColor;
-    float radius = minR.width * 0.5f;
-    Fumbo::Graphic2D::DrawCircleV(
-        {minR.x + radius, minR.y + radius}, radius, minC);
+    if (m_style.cornerRoundness == 0.0f) {
+      DrawWin95Button(minR);
+      float lineW = 7.0f;
+      float startX = minR.x + (minR.width - lineW) * 0.5f;
+      float startY = minR.y + minR.height - 4.5f;
+      Fumbo::Graphic2D::DrawLineEx({startX, startY}, {startX + lineW, startY}, 2.0f, BLACK);
+    } else {
+      Color minC = m_minHover ? m_style.minimizeButtonHoverColor
+                              : m_style.minimizeButtonColor;
+      float radius = minR.width * 0.5f;
+      Fumbo::Graphic2D::DrawCircleV(
+          {minR.x + radius, minR.y + radius}, radius, minC);
+    }
   }
 
   if (m_contentCallback) {

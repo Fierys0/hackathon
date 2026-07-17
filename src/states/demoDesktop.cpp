@@ -1,14 +1,15 @@
 #include "demoDesktop.hpp"
 #include "../core/globals.hpp"
+#include "fumbo.hpp"
 #include <algorithm>
-#include <ctime>
 #include <cstdio>
+#include <ctime>
 #include <string>
 
-static int s_selectedCommsCard = -1; // Tracks selected card in Comms UI
-static int s_mitigationTab = 0;       // 0=Flood, 1=Wildfire, 2=Volcano
+static int s_selectedCommsCard = -1;    // Tracks selected card in Comms UI
+static int s_mitigationTab = 0;         // 0=Flood, 1=Wildfire, 2=Volcano
 static bool s_queuedActions[3][5] = {}; // [tab][action] queued state
-static int s_hoveredMitAction = -1;    // Currently hovered action index
+static int s_hoveredMitAction = -1;     // Currently hovered action index
 static bool s_showEndShiftConfirm = false;
 // IGameState interface: delegates to OSDesktop
 
@@ -26,6 +27,56 @@ void DemoDesktop::Init() {
   m_decisionLogScroll = 0;
   s_showEndShiftConfirm = false;
 
+  // Load Windows 95/98 icons
+  m_bgIconTex = Fumbo::Assets::LoadTexture("assets/icons/bgicons.png");
+  m_threatIconTex = Fumbo::Assets::LoadTexture("assets/icons/threat.png");
+  m_commsIconTex = Fumbo::Assets::LoadTexture("assets/icons/comms.png");
+  m_mitigationIconTex =
+      Fumbo::Assets::LoadTexture("assets/icons/mitigation.png");
+  m_bookmarkIconTex = Fumbo::Assets::LoadTexture("assets/icons/bookmark.png");
+
+  // Setup Notepad-like textbox
+  m_notesWindowId = -1;
+  m_notesTextbox = Fumbo::UI::Textbox({0, 0, 100, 100}, OS::GlobalFont, 14);
+  m_notesTextbox.SetMultiline(true);
+  m_notesTextbox.SetBackgroundColor(WHITE);
+  m_notesTextbox.SetTextColor(BLACK);
+  m_notesTextbox.SetOutlineColor({128, 128, 128, 255}, {10, 36, 106, 255});
+  m_notesTextbox.SetPadding({6.0f, 6.0f});
+  m_notesTextbox.SetText(
+      "- Buy groceries\n- Finish the OS simulation\n- Submit hackathon "
+      "project\n- Learn more C++\n- Sleep more :)");
+
+  // Apply classic window styles
+  OS::WindowStyle winStyle;
+  winStyle.titleBarColor = {128, 128, 128, 255};    // Unfocused classic gray
+  winStyle.titleBarFocusedColor = {0, 0, 128, 255}; // Focused blue
+  winStyle.titleTextColor = WHITE;
+  winStyle.bodyColor = {192, 192, 192, 255};   // Classic light gray body
+  winStyle.borderColor = {128, 128, 128, 255}; // Silver border
+  winStyle.borderThickness = 2.0f;
+  winStyle.cornerRoundness = 0.0f; // Square corners
+  winStyle.enableShadow = false;   // No modern shadow
+  m_desktop->SetWindowStyle(winStyle);
+
+  // Apply classic taskbar styles
+  OS::TaskbarStyle taskStyle;
+  taskStyle.backgroundColor = {192, 192, 192, 255};
+  taskStyle.borderColor = {128, 128, 128, 255};
+  taskStyle.itemColor = {192, 192, 192, 255};
+  taskStyle.itemHoverColor = {210, 210, 210, 255};
+  taskStyle.itemActiveColor = {160, 160, 160, 255}; // Sunken classic gray
+  taskStyle.textColor = BLACK;
+  taskStyle.startButtonColor = {192, 192, 192, 255};
+  taskStyle.startButtonHoverColor = {210, 210, 210, 255};
+  taskStyle.startMenuBg = {192, 192, 192, 255};
+  taskStyle.startMenuBorder = {128, 128, 128, 255};
+  taskStyle.startMenuItemHover = {0, 0, 128, 255};
+  m_desktop->SetTaskbarStyle(taskStyle);
+
+  // Load Texture
+  m_wallpaper = Fumbo::Assets::LoadTexture("assets/images/background.png");
+
   // Setup all OS components
   SetupDesktopIcons();
   SetupStartMenu();
@@ -36,7 +87,10 @@ void DemoDesktop::Init() {
   m_desktop->Init();
 
   // Welcome notification
-  m_desktop->Notify("Welcome", "Fumbo OS is ready. Double-click an icon to start.");
+  m_desktop->Notify("Welcome",
+                    "Fumbo OS is ready. Double-click an icon to start.");
+
+  m_desktop->SetWallpaper(m_wallpaper);
 }
 
 void DemoDesktop::Cleanup() {
@@ -47,8 +101,16 @@ void DemoDesktop::Cleanup() {
 }
 
 void DemoDesktop::Update() {
-  if (m_desktop)
+  if (m_desktop) {
     m_desktop->Update();
+
+    // Update notes textbox if Notes window is open and visible
+    auto *notesWin = m_desktop->GetWindowManager().GetWindow(m_notesWindowId);
+    if (notesWin && notesWin->IsVisible()) {
+      m_notesTextbox.SetFocused(notesWin->IsFocused());
+      m_notesTextbox.Update();
+    }
+  }
 }
 
 void DemoDesktop::DrawClean() {
@@ -57,68 +119,58 @@ void DemoDesktop::DrawClean() {
 }
 
 void DemoDesktop::DrawDirty() {
+  DrawStatusBar();
+
   if (m_desktop)
     m_desktop->DrawDirty();
-
-  DrawStatusBar();
 }
 
 // Setup Helpers
 
 void DemoDesktop::SetupDesktopIcons() {
   // Threat Center icon
-  m_desktop->AddDesktopIcon("Threat Center", {0}, [this]() {
-    m_desktop->OpenWindow("Threat Center", {100, 80, 750, 450},
-                          DrawThreatCenterContent);
-    m_desktop->Notify("Threat Center", "Threat Monitoring System activated.");
-  });
+  m_desktop->AddDesktopIcon(
+      "Threat Center", m_threatIconTex, m_bgIconTex, [this]() {
+        m_desktop->OpenWindow("Threat Center", {100, 80, 750, 450},
+                              DrawThreatCenterContent, m_threatIconTex);
+        m_desktop->Notify("Threat Center",
+                          "Threat Monitoring System activated.");
+      });
 
   // Comms icon
-  m_desktop->AddDesktopIcon("Comms", {0}, [this]() {
-    m_desktop->OpenWindow("Comms", {100, 100, 850, 540},
-                          DrawCommsContent);
+  m_desktop->AddDesktopIcon("Comms", m_commsIconTex, m_bgIconTex, [this]() {
+    m_desktop->OpenWindow("Comms", {100, 100, 850, 540}, DrawCommsContent,
+                          m_commsIconTex);
     m_desktop->Notify("Comms & Media", "Comms Activated");
   });
 
   // Mitigation Hub icon
-  m_desktop->AddDesktopIcon("Mitigation Hub", {0}, [this]() {
-    m_desktop->OpenWindow("Mitigation Hub", {100, 100, 500, 350},
-                          [this](Rectangle area) { DrawMitigationHub(area); });
-    m_desktop->Notify("Mitigation Hub", "Don't let this disaster continue.");
-  });
+  m_desktop->AddDesktopIcon(
+      "Mitigation Hub", m_mitigationIconTex, m_bgIconTex, [this]() {
+        m_desktop->OpenWindow(
+            "Mitigation Hub", {100, 100, 500, 350},
+            [this](Rectangle area) { DrawMitigationHub(area); },
+            m_mitigationIconTex);
+        m_desktop->Notify("Mitigation Hub",
+                          "Don't let this disaster continue.");
+      });
 
   // Decision Log icon
-  m_desktop->AddDesktopIcon("Decision Log", {0}, [this]() {
-    m_desktop->OpenWindow("Decision Log", {100, 100, 500, 350},
-                          [this](Rectangle area) { DrawDecisionLog(area); });
-    m_desktop->Notify("Decision Log", "Decision Log activated.");
-  });
-
-  // Terminal icon
-  m_desktop->AddDesktopIcon("Terminal", {0}, [this]() {
-    m_desktop->OpenWindow("Terminal", {200, 100, 500, 350},
-                          DrawTerminalContent);
-    m_desktop->Notify("Terminal", "Terminal window opened.");
-  });
-
-  // Settings icon
-  m_desktop->AddDesktopIcon("Settings", {0}, [this]() {
-    m_desktop->OpenWindow("Settings", {250, 120, 450, 320},
-                          DrawSettingsContent);
-  });
-
-  // File Manager icon
-  m_desktop->AddDesktopIcon("Files", {0}, [this]() {
-    m_desktop->OpenWindow("File Manager", {180, 90, 520, 380},
-                          DrawFileManagerContent);
-  });
+  m_desktop->AddDesktopIcon(
+      "Decision Log", m_bookmarkIconTex, m_bgIconTex, [this]() {
+        m_desktop->OpenWindow(
+            "Decision Log", {100, 100, 500, 350},
+            [this](Rectangle area) { DrawDecisionLog(area); },
+            m_bookmarkIconTex);
+        m_desktop->Notify("Decision Log", "Decision Log activated.");
+      });
 
   // Notes icon
-  m_desktop->AddDesktopIcon("Notes", {0}, [this]() {
-    m_desktop->OpenWindow("Notes", {300, 140, 380, 280},
-                          DrawNotesContent);
+  m_desktop->AddDesktopIcon("Notes", m_bookmarkIconTex, m_bgIconTex, [this]() {
+    m_notesWindowId = m_desktop->OpenWindow(
+        "Notes", {300, 140, 380, 280},
+        [this](Rectangle area) { DrawNotesContent(area); }, m_bookmarkIconTex);
   });
-
 }
 
 void DemoDesktop::SetupStartMenu() {
@@ -152,16 +204,14 @@ void DemoDesktop::SetupContextMenu() {
     static int count = 1;
     std::string title = "Window " + std::to_string(count++);
     m_desktop->OpenWindow(
-        title,
-        {150.0f + count * 20.0f, 80.0f + count * 15.0f, 420.0f, 280.0f},
+        title, {150.0f + count * 20.0f, 80.0f + count * 15.0f, 420.0f, 280.0f},
         [title](Rectangle area) {
           Fumbo::Graphic2D::DrawText(
               "Content of " + title, {area.x + 15.0f, area.y + 15.0f},
               GetFontDefault(), 14, {200, 200, 230, 255});
           Fumbo::Graphic2D::DrawText(
-              "Drag the title bar to move",
-              {area.x + 15.0f, area.y + 40.0f}, GetFontDefault(), 12,
-              {150, 150, 180, 255});
+              "Drag the title bar to move", {area.x + 15.0f, area.y + 40.0f},
+              GetFontDefault(), 12, {150, 150, 180, 255});
           Fumbo::Graphic2D::DrawText(
               "Drag edges to resize", {area.x + 15.0f, area.y + 58.0f},
               GetFontDefault(), 12, {150, 150, 180, 255});
@@ -169,7 +219,8 @@ void DemoDesktop::SetupContextMenu() {
   });
 
   ctxMenu.AddItem("Send Notification", [this]() {
-    m_desktop->Notify("Hello!", "This is a test notification from the desktop.");
+    m_desktop->Notify("Hello!",
+                      "This is a test notification from the desktop.");
   });
 
   ctxMenu.AddSeparator();
@@ -190,8 +241,7 @@ void DemoDesktop::SetupSystemTray() {
 
         float textY = area.y + (area.height - 11) * 0.5f;
         Fumbo::Graphic2D::DrawText(buf, {area.x + 2.0f, textY},
-                                   GetFontDefault(), 11,
-                                   {200, 200, 230, 255});
+                                   GetFontDefault(), 11, {200, 200, 230, 255});
       },
       nullptr, 45.0f);
 }
@@ -207,8 +257,8 @@ void DemoDesktop::DrawTerminalContent(Rectangle area) {
 
   Fumbo::Graphic2D::DrawText("user@fumbo-os:~$", {x, y}, font, 12,
                              {80, 220, 80, 255});
-  Fumbo::Graphic2D::DrawText("echo \"Hello, World!\"", {x + 130.0f, y},
-                             font, 12, {200, 200, 220, 255});
+  Fumbo::Graphic2D::DrawText("echo \"Hello, World!\"", {x + 130.0f, y}, font,
+                             12, {200, 200, 220, 255});
   y += 18.0f;
   Fumbo::Graphic2D::DrawText("Hello, World!", {x, y}, font, 12,
                              {200, 200, 220, 255});
@@ -226,16 +276,15 @@ void DemoDesktop::DrawSettingsContent(Rectangle area) {
   y += 30.0f;
 
   const char *settings[] = {"Display", "Sound", "Network", "Appearance",
-                             "Privacy"};
+                            "Privacy"};
   for (int i = 0; i < 5; i++) {
     Rectangle itemRect = {x, y, area.width - 30.0f, 30.0f};
-    Color bg =
-        (i % 2 == 0) ? Color{40, 40, 60, 200} : Color{35, 35, 52, 200};
+    Color bg = (i % 2 == 0) ? Color{40, 40, 60, 200} : Color{35, 35, 52, 200};
     Fumbo::Graphic2D::DrawRectangleRounded(itemRect, 0.1f, 4, bg);
-    Fumbo::Graphic2D::DrawText(settings[i], {x + 12.0f, y + 7.0f}, font,
-                               12, {200, 200, 230, 255});
-    Fumbo::Graphic2D::DrawText(">", {x + area.width - 50.0f, y + 7.0f},
-                               font, 12, {120, 120, 160, 255});
+    Fumbo::Graphic2D::DrawText(settings[i], {x + 12.0f, y + 7.0f}, font, 12,
+                               {200, 200, 230, 255});
+    Fumbo::Graphic2D::DrawText(">", {x + area.width - 50.0f, y + 7.0f}, font,
+                               12, {120, 120, 160, 255});
     y += 34.0f;
   }
 }
@@ -247,21 +296,19 @@ void DemoDesktop::DrawFileManagerContent(Rectangle area) {
 
   // Path bar
   Rectangle pathBar = {x, y, area.width - 20.0f, 24.0f};
-  Fumbo::Graphic2D::DrawRectangleRounded(pathBar, 0.15f, 4,
-                                         {40, 40, 60, 220});
-  Fumbo::Graphic2D::DrawText("/home/user/Documents", {x + 8.0f, y + 5.0f},
-                             font, 11, {180, 180, 210, 255});
+  Fumbo::Graphic2D::DrawRectangleRounded(pathBar, 0.15f, 4, {40, 40, 60, 220});
+  Fumbo::Graphic2D::DrawText("/home/user/Documents", {x + 8.0f, y + 5.0f}, font,
+                             11, {180, 180, 210, 255});
   y += 32.0f;
 
   // File list
   const char *files[] = {"Documents/", "Pictures/", "Music/",
-                          "readme.txt",  "notes.md",  "config.json"};
+                         "readme.txt", "notes.md",  "config.json"};
   const char *sizes[] = {"--", "--", "--", "4.2 KB", "1.1 KB", "256 B"};
 
   for (int i = 0; i < 6; i++) {
     Rectangle itemRect = {x, y, area.width - 20.0f, 26.0f};
-    Color bg =
-        (i % 2 == 0) ? Color{38, 38, 56, 200} : Color{34, 34, 50, 200};
+    Color bg = (i % 2 == 0) ? Color{38, 38, 56, 200} : Color{34, 34, 50, 200};
     Fumbo::Graphic2D::DrawRectangleRec(itemRect, bg);
 
     Color dotColor =
@@ -276,36 +323,16 @@ void DemoDesktop::DrawFileManagerContent(Rectangle area) {
 }
 
 void DemoDesktop::DrawNotesContent(Rectangle area) {
-  Fumbo::Graphic2D::DrawRectangleRec(area, {25, 25, 38, 255});
-
-  float y = area.y + 12.0f;
-  float x = area.x + 12.0f;
-  Font font = GetFontDefault();
-
-  Fumbo::Graphic2D::DrawText("My Notes", {x, y}, font, 14, WHITE);
-  y += 24.0f;
-
-  Fumbo::Graphic2D::DrawLineEx({x, y}, {x + area.width - 24.0f, y}, 1.0f,
-                               {60, 60, 90, 200});
-  y += 8.0f;
-
-  const char *lines[] = {"- Buy groceries",
-                          "- Finish the OS simulation",
-                          "- Submit hackathon project",
-                          "- Learn more C++",
-                          "- Sleep more :)"};
-  for (int i = 0; i < 5; i++) {
-    Fumbo::Graphic2D::DrawText(lines[i], {x, y}, font, 12,
-                               {190, 190, 215, 255});
-    y += 20.0f;
-  }
+  Fumbo::Graphic2D::DrawRectangleRec(area, {192, 192, 192, 255});
+  m_notesTextbox.SetBounds(
+      {area.x + 2.0f, area.y + 2.0f, area.width - 4.0f, area.height - 4.0f});
+  m_notesTextbox.Draw();
 }
 
 void DemoDesktop::DrawAboutContent(Rectangle area) {
   Font font = GetFontDefault();
   Fumbo::Graphic2D::DrawText("Fumbo OS Simulation",
-                             {area.x + 15.0f, area.y + 15.0f}, font, 16,
-                             WHITE);
+                             {area.x + 15.0f, area.y + 15.0f}, font, 16, WHITE);
   Fumbo::Graphic2D::DrawText("Built with Fumbo Engine",
                              {area.x + 15.0f, area.y + 40.0f}, font, 12,
                              {180, 180, 200, 255});
@@ -331,42 +358,63 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   float leftH = area.height - (padding * 2.0f);
 
   // Draw header for Map section
-  Fumbo::Graphic2D::DrawText("REGIONAL MONITORING MAP", {leftX + 5.0f, leftY + 5.0f}, font, 13, {0, 230, 118, 255});
+  Fumbo::Graphic2D::DrawText("REGIONAL MONITORING MAP",
+                             {leftX + 5.0f, leftY + 5.0f}, font, 13,
+                             {0, 230, 118, 255});
 
   // Draw simulated map box
   Rectangle mapBox = {leftX, leftY + 25.0f, leftW, leftH - 25.0f};
   Fumbo::Graphic2D::DrawRectangleRounded(mapBox, 0.05f, 4, {28, 33, 46, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(mapBox, 0.05f, 4, 1.0f, {50, 60, 80, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(mapBox, 0.05f, 4, 1.0f,
+                                                {50, 60, 80, 255});
 
   // Draw map grid lines
   for (int gx = 1; gx < 5; gx++) {
     float gridX = mapBox.x + (mapBox.width / 5) * gx;
-    Fumbo::Graphic2D::DrawLineEx({gridX, mapBox.y}, {gridX, mapBox.y + mapBox.height}, 1.0f, {38, 44, 60, 150});
+    Fumbo::Graphic2D::DrawLineEx({gridX, mapBox.y},
+                                 {gridX, mapBox.y + mapBox.height}, 1.0f,
+                                 {38, 44, 60, 150});
   }
   for (int gy = 1; gy < 4; gy++) {
     float gridY = mapBox.y + (mapBox.height / 4) * gy;
-    Fumbo::Graphic2D::DrawLineEx({mapBox.x, gridY}, {mapBox.x + mapBox.width, gridY}, 1.0f, {38, 44, 60, 150});
+    Fumbo::Graphic2D::DrawLineEx({mapBox.x, gridY},
+                                 {mapBox.x + mapBox.width, gridY}, 1.0f,
+                                 {38, 44, 60, 150});
   }
 
   // Draw 3 sectors and threat monitoring sensors
   // Sector A (North): Flood Monitoring Zone
-  Vector2 secACenter = {mapBox.x + mapBox.width * 0.5f, mapBox.y + mapBox.height * 0.28f};
-  Fumbo::Graphic2D::DrawCircleV(secACenter, 7.0f, {41, 121, 255, 255}); // Blue for water
-  Fumbo::Graphic2D::DrawText("SEC-A [RIVER]", {secACenter.x - 38.0f, secACenter.y - 18.0f}, font, 10, {150, 180, 220, 255});
+  Vector2 secACenter = {mapBox.x + mapBox.width * 0.5f,
+                        mapBox.y + mapBox.height * 0.28f};
+  Fumbo::Graphic2D::DrawCircleV(secACenter, 7.0f,
+                                {41, 121, 255, 255}); // Blue for water
+  Fumbo::Graphic2D::DrawText("SEC-A [RIVER]",
+                             {secACenter.x - 38.0f, secACenter.y - 18.0f}, font,
+                             10, {150, 180, 220, 255});
 
   // Sector B (South-West): Seismic Monitoring Zone
-  Vector2 secBCenter = {mapBox.x + mapBox.width * 0.25f, mapBox.y + mapBox.height * 0.72f};
-  Fumbo::Graphic2D::DrawCircleV(secBCenter, 7.0f, {255, 145, 0, 255}); // Orange for seismic
-  Fumbo::Graphic2D::DrawText("SEC-B [SEISMIC]", {secBCenter.x - 45.0f, secBCenter.y - 18.0f}, font, 10, {220, 180, 150, 255});
+  Vector2 secBCenter = {mapBox.x + mapBox.width * 0.25f,
+                        mapBox.y + mapBox.height * 0.72f};
+  Fumbo::Graphic2D::DrawCircleV(secBCenter, 7.0f,
+                                {255, 145, 0, 255}); // Orange for seismic
+  Fumbo::Graphic2D::DrawText("SEC-B [SEISMIC]",
+                             {secBCenter.x - 45.0f, secBCenter.y - 18.0f}, font,
+                             10, {220, 180, 150, 255});
 
   // Sector C (South-East): Wildfire Danger Zone
-  Vector2 secCCenter = {mapBox.x + mapBox.width * 0.75f, mapBox.y + mapBox.height * 0.68f};
-  Fumbo::Graphic2D::DrawCircleV(secCCenter, 7.0f, {255, 23, 68, 255}); // Red for fire danger
-  Fumbo::Graphic2D::DrawText("SEC-C [WILDFIRE]", {secCCenter.x - 48.0f, secCCenter.y - 18.0f}, font, 10, {255, 150, 150, 255});
+  Vector2 secCCenter = {mapBox.x + mapBox.width * 0.75f,
+                        mapBox.y + mapBox.height * 0.68f};
+  Fumbo::Graphic2D::DrawCircleV(secCCenter, 7.0f,
+                                {255, 23, 68, 255}); // Red for fire danger
+  Fumbo::Graphic2D::DrawText("SEC-C [WILDFIRE]",
+                             {secCCenter.x - 48.0f, secCCenter.y - 18.0f}, font,
+                             10, {255, 150, 150, 255});
 
   // 3. Draw Vertical Divider
   float dividerX = area.x + leftWidth;
-  Fumbo::Graphic2D::DrawLineEx({dividerX, area.y + padding}, {dividerX, area.y + area.height - padding}, 1.0f, {60, 68, 90, 255});
+  Fumbo::Graphic2D::DrawLineEx({dividerX, area.y + padding},
+                               {dividerX, area.y + area.height - padding}, 1.0f,
+                               {60, 68, 90, 255});
 
   // Right Column Content: SOP Rules Reference
   float rightX = dividerX + (padding * 0.5f);
@@ -375,50 +423,72 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   float rightH = area.height - (padding * 2.0f);
 
   // Draw header for SOP Reference Drawer
-  Fumbo::Graphic2D::DrawText("MONITORING PROTOCOLS", {rightX + 5.0f, rightY + 5.0f}, font, 13, {255, 215, 0, 255});
+  Fumbo::Graphic2D::DrawText("MONITORING PROTOCOLS",
+                             {rightX + 5.0f, rightY + 5.0f}, font, 13,
+                             {255, 215, 0, 255});
 
   // Draw a content frame for SOP text
   Rectangle sopBox = {rightX, rightY + 25.0f, rightW, rightH - 25.0f};
   Fumbo::Graphic2D::DrawRectangleRounded(sopBox, 0.05f, 4, {23, 27, 38, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(sopBox, 0.05f, 4, 1.0f, {50, 60, 80, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(sopBox, 0.05f, 4, 1.0f,
+                                                {50, 60, 80, 255});
 
   // Draw actual text guidelines inside SOP Drawer
   float textY = sopBox.y + 12.0f;
   float textX = sopBox.x + 12.0f;
 
-  Fumbo::Graphic2D::DrawText("RULE-01: FLOODING LEVEL", {textX, textY}, font, 11, {140, 180, 255, 255});
+  Fumbo::Graphic2D::DrawText("RULE-01: FLOODING LEVEL", {textX, textY}, font,
+                             11, {140, 180, 255, 255});
   textY += 15.0f;
-  Fumbo::Graphic2D::DrawText("- Trigger if River Depth > 4.5m", {textX + 8.0f, textY}, font, 10, {180, 180, 210, 255});
+  Fumbo::Graphic2D::DrawText("- Trigger if River Depth > 4.5m",
+                             {textX + 8.0f, textY}, font, 10,
+                             {180, 180, 210, 255});
   textY += 12.0f;
-  Fumbo::Graphic2D::DrawText("  OR Rainfall rate > 80mm/h", {textX + 8.0f, textY}, font, 10, {180, 180, 210, 255});
+  Fumbo::Graphic2D::DrawText("  OR Rainfall rate > 80mm/h",
+                             {textX + 8.0f, textY}, font, 10,
+                             {180, 180, 210, 255});
   textY += 22.0f;
 
-  Fumbo::Graphic2D::DrawText("RULE-02: WILDFIRE DANGER", {textX, textY}, font, 11, {255, 140, 140, 255});
+  Fumbo::Graphic2D::DrawText("RULE-02: WILDFIRE DANGER", {textX, textY}, font,
+                             11, {255, 140, 140, 255});
   textY += 15.0f;
-  Fumbo::Graphic2D::DrawText("- Trigger if Temp > 38.0 C", {textX + 8.0f, textY}, font, 10, {180, 180, 210, 255});
+  Fumbo::Graphic2D::DrawText("- Trigger if Temp > 38.0 C",
+                             {textX + 8.0f, textY}, font, 10,
+                             {180, 180, 210, 255});
   textY += 12.0f;
-  Fumbo::Graphic2D::DrawText("  AND Air Humidity < 15%", {textX + 8.0f, textY}, font, 10, {180, 180, 210, 255});
+  Fumbo::Graphic2D::DrawText("  AND Air Humidity < 15%", {textX + 8.0f, textY},
+                             font, 10, {180, 180, 210, 255});
   textY += 22.0f;
 
-  Fumbo::Graphic2D::DrawText("RULE-03: SEISMIC ACTIVITY", {textX, textY}, font, 11, {255, 220, 140, 255});
+  Fumbo::Graphic2D::DrawText("RULE-03: SEISMIC ACTIVITY", {textX, textY}, font,
+                             11, {255, 220, 140, 255});
   textY += 15.0f;
-  Fumbo::Graphic2D::DrawText("- Alert if Tremors > 12 / hr", {textX + 8.0f, textY}, font, 10, {180, 180, 210, 255});
+  Fumbo::Graphic2D::DrawText("- Alert if Tremors > 12 / hr",
+                             {textX + 8.0f, textY}, font, 10,
+                             {180, 180, 210, 255});
   textY += 12.0f;
-  Fumbo::Graphic2D::DrawText("  OR gas density > 350ppm", {textX + 8.0f, textY}, font, 10, {180, 180, 210, 255});
+  Fumbo::Graphic2D::DrawText("  OR gas density > 350ppm", {textX + 8.0f, textY},
+                             font, 10, {180, 180, 210, 255});
   textY += 24.0f;
 
   // Visual divider
-  Fumbo::Graphic2D::DrawLineEx({textX, textY}, {textX + rightW - 24.0f, textY}, 1.0f, {60, 68, 90, 255});
+  Fumbo::Graphic2D::DrawLineEx({textX, textY}, {textX + rightW - 24.0f, textY},
+                               1.0f, {60, 68, 90, 255});
   textY += 10.0f;
 
   // Real-time sensor checklist snippet
-  Fumbo::Graphic2D::DrawText("LIVE MONITOR STATUS:", {textX, textY}, font, 11, {0, 230, 118, 255});
+  Fumbo::Graphic2D::DrawText("LIVE MONITOR STATUS:", {textX, textY}, font, 11,
+                             {0, 230, 118, 255});
   textY += 16.0f;
-  Fumbo::Graphic2D::DrawText("SEC-A: 3.8m | 42mm/h (OK)", {textX + 8.0f, textY}, font, 10, {180, 235, 180, 255});
+  Fumbo::Graphic2D::DrawText("SEC-A: 3.8m | 42mm/h (OK)", {textX + 8.0f, textY},
+                             font, 10, {180, 235, 180, 255});
   textY += 14.0f;
-  Fumbo::Graphic2D::DrawText("SEC-B: 7 tremors/h   (OK)", {textX + 8.0f, textY}, font, 10, {180, 235, 180, 255});
+  Fumbo::Graphic2D::DrawText("SEC-B: 7 tremors/h   (OK)", {textX + 8.0f, textY},
+                             font, 10, {180, 235, 180, 255});
   textY += 14.0f;
-  Fumbo::Graphic2D::DrawText("SEC-C: 39 C | Hum 12% (WARN)", {textX + 8.0f, textY}, font, 10, {255, 140, 140, 255});
+  Fumbo::Graphic2D::DrawText("SEC-C: 39 C | Hum 12% (WARN)",
+                             {textX + 8.0f, textY}, font, 10,
+                             {255, 140, 140, 255});
 }
 
 void DemoDesktop::AddDecisionLogEntry(const std::string &title,
@@ -439,7 +509,7 @@ void DemoDesktop::AddDecisionLogEntry(const std::string &title,
   std::tm *timeInfo = std::localtime(&now);
   char stamp[6];
   std::snprintf(stamp, sizeof(stamp), "%02d:%02d", timeInfo->tm_hour,
-               timeInfo->tm_min);
+                timeInfo->tm_min);
   entry.timestamp = stamp;
 
   m_decisionLog.push_back(entry);
@@ -454,32 +524,44 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
   Vector2 mouse = GetMousePosition();
 
   float summaryH = 84.0f;
-  Rectangle summaryBar = {area.x + padding, area.y + padding, area.width - 2.0f * padding, summaryH};
-  Fumbo::Graphic2D::DrawRectangleRounded(summaryBar, 0.05f, 4, {24, 29, 40, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(summaryBar, 0.05f, 4, 1.0f, {60, 70, 92, 255});
+  Rectangle summaryBar = {area.x + padding, area.y + padding,
+                          area.width - 2.0f * padding, summaryH};
+  Fumbo::Graphic2D::DrawRectangleRounded(summaryBar, 0.05f, 4,
+                                         {24, 29, 40, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(summaryBar, 0.05f, 4, 1.0f,
+                                                {60, 70, 92, 255});
 
-  Fumbo::Graphic2D::DrawText("TODAY'S SHIFT SUMMARY", {summaryBar.x + 10.0f, summaryBar.y + 10.0f}, font, 11, {255, 215, 0, 255});
+  Fumbo::Graphic2D::DrawText("TODAY'S SHIFT SUMMARY",
+                             {summaryBar.x + 10.0f, summaryBar.y + 10.0f}, font,
+                             11, {255, 215, 0, 255});
 
   std::string totalActions = std::to_string(m_decisionLog.size());
   std::string budgetSpent = "$" + std::to_string(std::max(0, 50000 - m_budget));
-  std::string trustDelta = (m_publicTrust >= 85) ? "+0" : std::to_string(m_publicTrust - 85);
+  std::string trustDelta =
+      (m_publicTrust >= 85) ? "+0" : std::to_string(m_publicTrust - 85);
   if (m_publicTrust != 85 && trustDelta[0] != '-') {
     trustDelta = "+" + trustDelta;
   }
   std::string primaryThreat = "Flood - Sector A";
   if (!m_decisionLog.empty()) {
-    primaryThreat = m_decisionLog.back().disaster + " - " + m_decisionLog.back().sector;
+    primaryThreat =
+        m_decisionLog.back().disaster + " - " + m_decisionLog.back().sector;
   }
-  std::string shiftStatus = m_decisionLog.empty() ? "Awaiting action" : "Review active";
+  std::string shiftStatus =
+      m_decisionLog.empty() ? "Awaiting action" : "Review active";
 
   float colW = (summaryBar.width - 40.0f) / 5.0f;
   float summaryY = summaryBar.y + 30.0f;
   const char *labels[] = {"Actions", "Budget", "Trust", "Threat", "Status"};
-  const char *values[] = {totalActions.c_str(), budgetSpent.c_str(), trustDelta.c_str(), primaryThreat.c_str(), shiftStatus.c_str()};
+  const char *values[] = {totalActions.c_str(), budgetSpent.c_str(),
+                          trustDelta.c_str(), primaryThreat.c_str(),
+                          shiftStatus.c_str()};
   for (int i = 0; i < 5; i++) {
     float x = summaryBar.x + 12.0f + i * colW;
-    Fumbo::Graphic2D::DrawText(labels[i], {x, summaryY}, font, 9, {150, 150, 170, 255});
-    Fumbo::Graphic2D::DrawText(values[i], {x, summaryY + 16.0f}, font, 10, {220, 220, 235, 255});
+    Fumbo::Graphic2D::DrawText(labels[i], {x, summaryY}, font, 9,
+                               {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText(values[i], {x, summaryY + 16.0f}, font, 10,
+                               {220, 220, 235, 255});
   }
 
   float listX = area.x + padding;
@@ -488,46 +570,74 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
   float listH = area.height - (listY - area.y) - padding;
 
   Rectangle timelinePanel = {listX, listY, listW, listH};
-  Fumbo::Graphic2D::DrawRectangleRounded(timelinePanel, 0.04f, 4, {24, 29, 40, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(timelinePanel, 0.04f, 4, 1.0f, {60, 70, 92, 255});
-  Fumbo::Graphic2D::DrawText("DECISION TIMELINE", {timelinePanel.x + 10.0f, timelinePanel.y + 10.0f}, font, 11, {0, 230, 118, 255});
+  Fumbo::Graphic2D::DrawRectangleRounded(timelinePanel, 0.04f, 4,
+                                         {24, 29, 40, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(timelinePanel, 0.04f, 4, 1.0f,
+                                                {60, 70, 92, 255});
+  Fumbo::Graphic2D::DrawText("DECISION TIMELINE",
+                             {timelinePanel.x + 10.0f, timelinePanel.y + 10.0f},
+                             font, 11, {0, 230, 118, 255});
 
   if (m_decisionLog.empty()) {
-    Fumbo::Graphic2D::DrawText("No decisions recorded yet.", {timelinePanel.x + 12.0f, timelinePanel.y + 42.0f}, font, 10, {140, 140, 160, 255});
-    Fumbo::Graphic2D::DrawText("Queue actions in the Mitigation Hub and lock the shift to populate this log.", {timelinePanel.x + 12.0f, timelinePanel.y + 60.0f}, font, 9, {110, 110, 135, 255});
+    Fumbo::Graphic2D::DrawText(
+        "No decisions recorded yet.",
+        {timelinePanel.x + 12.0f, timelinePanel.y + 42.0f}, font, 10,
+        {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText(
+        "Queue actions in the Mitigation Hub and lock the shift to populate "
+        "this log.",
+        {timelinePanel.x + 12.0f, timelinePanel.y + 60.0f}, font, 9,
+        {110, 110, 135, 255});
   } else {
     float wheel = GetMouseWheelMove();
     if (wheel != 0.0f) {
       int maxScroll = std::max(0, static_cast<int>(m_decisionLog.size()) - 6);
-      m_decisionLogScroll = std::clamp(m_decisionLogScroll + (wheel > 0 ? -1 : 1), 0, maxScroll);
+      m_decisionLogScroll =
+          std::clamp(m_decisionLogScroll + (wheel > 0 ? -1 : 1), 0, maxScroll);
     }
 
     float rowY = timelinePanel.y + 36.0f;
     int visibleRows = 6;
     for (int i = 0; i < visibleRows; i++) {
       int index = m_decisionLogScroll + i;
-      if (index >= static_cast<int>(m_decisionLog.size())) break;
+      if (index >= static_cast<int>(m_decisionLog.size()))
+        break;
 
       const DecisionLogEntry &entry = m_decisionLog[index];
-      Rectangle rowRect = {timelinePanel.x + 8.0f, rowY + i * 42.0f, timelinePanel.width - 16.0f, 34.0f};
+      Rectangle rowRect = {timelinePanel.x + 8.0f, rowY + i * 42.0f,
+                           timelinePanel.width - 16.0f, 34.0f};
       bool hovered = CheckCollisionPointRec(mouse, rowRect);
       bool selected = (index == m_selectedDecisionLogEntry);
 
-      Color rowBg = selected ? Color{32, 42, 58, 255} : (hovered ? Color{36, 42, 59, 255} : Color{26, 31, 43, 255});
+      Color rowBg = selected ? Color{32, 42, 58, 255}
+                             : (hovered ? Color{36, 42, 59, 255}
+                                        : Color{26, 31, 43, 255});
       Fumbo::Graphic2D::DrawRectangleRounded(rowRect, 0.05f, 4, rowBg);
-      Color borderColor = selected ? Color{0, 230, 118, 255} : Color{55, 63, 86, 255};
-      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(rowRect, 0.05f, 4, 1.0f, borderColor);
+      Color borderColor =
+          selected ? Color{0, 230, 118, 255} : Color{55, 63, 86, 255};
+      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(rowRect, 0.05f, 4, 1.0f,
+                                                    borderColor);
 
-      Fumbo::Graphic2D::DrawText(entry.timestamp, {rowRect.x + 8.0f, rowRect.y + 8.0f}, font, 9, {255, 215, 0, 255});
-      Fumbo::Graphic2D::DrawText(entry.title, {rowRect.x + 58.0f, rowRect.y + 8.0f}, font, 9, WHITE);
-      Fumbo::Graphic2D::DrawText(entry.disaster + " - " + entry.sector, {rowRect.x + 58.0f, rowRect.y + 18.0f}, font, 8, {150, 150, 170, 255});
+      Fumbo::Graphic2D::DrawText(entry.timestamp,
+                                 {rowRect.x + 8.0f, rowRect.y + 8.0f}, font, 9,
+                                 {255, 215, 0, 255});
+      Fumbo::Graphic2D::DrawText(
+          entry.title, {rowRect.x + 58.0f, rowRect.y + 8.0f}, font, 9, WHITE);
+      Fumbo::Graphic2D::DrawText(entry.disaster + " - " + entry.sector,
+                                 {rowRect.x + 58.0f, rowRect.y + 18.0f}, font,
+                                 8, {150, 150, 170, 255});
 
       Color statusColor = {0, 230, 118, 255};
-      if (entry.status == "Pending") statusColor = {255, 145, 0, 255};
-      else if (entry.status == "Failed") statusColor = {255, 23, 68, 255};
-      Rectangle badgeRect = {rowRect.x + rowRect.width - 64.0f, rowRect.y + 8.0f, 56.0f, 16.0f};
+      if (entry.status == "Pending")
+        statusColor = {255, 145, 0, 255};
+      else if (entry.status == "Failed")
+        statusColor = {255, 23, 68, 255};
+      Rectangle badgeRect = {rowRect.x + rowRect.width - 64.0f,
+                             rowRect.y + 8.0f, 56.0f, 16.0f};
       Fumbo::Graphic2D::DrawRectangleRounded(badgeRect, 0.2f, 4, statusColor);
-      Fumbo::Graphic2D::DrawText(entry.status, {badgeRect.x + 8.0f, badgeRect.y + 3.0f}, font, 8, WHITE);
+      Fumbo::Graphic2D::DrawText(entry.status,
+                                 {badgeRect.x + 8.0f, badgeRect.y + 3.0f}, font,
+                                 8, WHITE);
 
       if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         m_selectedDecisionLogEntry = index;
@@ -541,18 +651,28 @@ void DemoDesktop::DrawDecisionLog(Rectangle area) {
   float detailH = listH;
 
   Rectangle detailPanel = {detailX, detailY, detailW, detailH};
-  Fumbo::Graphic2D::DrawRectangleRounded(detailPanel, 0.04f, 4, {24, 29, 40, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(detailPanel, 0.04f, 4, 1.0f, {60, 70, 92, 255});
-  Fumbo::Graphic2D::DrawText("ACTION DETAILS", {detailPanel.x + 10.0f, detailPanel.y + 10.0f}, font, 11, {255, 215, 0, 255});
+  Fumbo::Graphic2D::DrawRectangleRounded(detailPanel, 0.04f, 4,
+                                         {24, 29, 40, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(detailPanel, 0.04f, 4, 1.0f,
+                                                {60, 70, 92, 255});
+  Fumbo::Graphic2D::DrawText("ACTION DETAILS",
+                             {detailPanel.x + 10.0f, detailPanel.y + 10.0f},
+                             font, 11, {255, 215, 0, 255});
 
-  if (m_decisionLog.empty() || m_selectedDecisionLogEntry < 0 || m_selectedDecisionLogEntry >= static_cast<int>(m_decisionLog.size())) {
-    Fumbo::Graphic2D::DrawText("Select a log entry to inspect its details.", {detailPanel.x + 12.0f, detailPanel.y + 42.0f}, font, 10, {140, 140, 160, 255});
+  if (m_decisionLog.empty() || m_selectedDecisionLogEntry < 0 ||
+      m_selectedDecisionLogEntry >= static_cast<int>(m_decisionLog.size())) {
+    Fumbo::Graphic2D::DrawText("Select a log entry to inspect its details.",
+                               {detailPanel.x + 12.0f, detailPanel.y + 42.0f},
+                               font, 10, {140, 140, 160, 255});
   } else {
     const DecisionLogEntry &entry = m_decisionLog[m_selectedDecisionLogEntry];
     float dy = detailPanel.y + 40.0f;
-    auto DrawDetailRow = [&](const std::string &label, const std::string &value) {
-      Fumbo::Graphic2D::DrawText(label, {detailPanel.x + 12.0f, dy}, font, 9, {150, 150, 170, 255});
-      Fumbo::Graphic2D::DrawText(value, {detailPanel.x + 140.0f, dy}, font, 9, {220, 220, 235, 255});
+    auto DrawDetailRow = [&](const std::string &label,
+                             const std::string &value) {
+      Fumbo::Graphic2D::DrawText(label, {detailPanel.x + 12.0f, dy}, font, 9,
+                                 {150, 150, 170, 255});
+      Fumbo::Graphic2D::DrawText(value, {detailPanel.x + 140.0f, dy}, font, 9,
+                                 {220, 220, 235, 255});
       dy += 18.0f;
     };
 
@@ -581,43 +701,85 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
   };
 
   static CommsCard cards[6] = {
-    {
-      "BREAKING NEWS", "[!]", "CRITICAL FAILURE: SECTOR ALPHA FLOODGATE ACTUATORS JAMMED", "10:14 AM", "CRITICAL",
-      "Reservoir levels are rising at 0.5m/hr with storm systems approaching. Manual override controls are unresponsive.",
-      "A mechanical jam has occurred in the primary hydraulic pistons of Dam Floodgate A in Sector Alpha. Maintenance engineers are locked out of the control room due to localized flash flooding blocking the access road. Remote commands from the Mitigation Hub have failed. Current predictions estimate reservoir breach in 4 hours if actuators remain jammed. Heavy rainfall upstream continues.",
-      {255, 23, 68, 255}
-    },
-    {
-      "WEATHER UPDATE", "[W]", "Severe Storm Advisory Upgraded to Level 4", "10:02 AM", "HIGH",
-      "Meteorological radar confirms high precipitation intensity band heading northeast. 120mm rainfall expected.",
-      "The National Weather Service has raised the local weather warning to Level 4 (Severe Storm). Active precipitation levels are exceeding models. Low-lying zones in Sector Alpha and adjacent riverbanks are expected to experience rapid inundation within the hour. Strong winds up to 45 knots may hinder deployment of drone sensors.",
-      {255, 145, 0, 255}
-    },
-    {
-      "CITIZEN REPORT", "[C]", "Reports of Mud Slurry on West Highway", "09:45 AM", "MEDIUM",
-      "Multiple commuters report mud and small boulders rolling down the slope of Sector Beta ridge. Patrol dispatched.",
-      "Emergency dispatcher received multiple calls from citizens driving on Route 9-West in Sector Beta. Drivers report mud, branches, and small rocks spilling across the lanes. Local authorities are setting up temporary caution signage. Geological sensor logs indicate ground movement risk is elevated. Commuters advise seeking alternate routes.",
-      {255, 215, 0, 255}
-    },
-    {
-      "CCTV / SENSOR", "[S]", "Seismic Station 04 Lost Power & Data Stream", "09:30 AM", "MEDIUM",
-      "Sensor telemetry disconnected suddenly. Backup battery systems show offline. Fault code: ERR_COMM_OUT.",
-      "Seismic Monitor Station 04, located on the northern slope of Mount Vesuvius Sector B, has ceased broadcasting. Telemetry showed a sudden voltage drop followed by complete signal loss. Inspection team cannot confirm if this is a physical sensor damage or power circuit failure. Seismic data from surrounding stations is still normal.",
-      {255, 215, 0, 255}
-    },
-    {
-      "RESCUE REPORT", "[R]", "Team 02 Pre-positioned in Zone B Standby", "09:15 AM", "LOW",
-      "All primary search and rescue assets, including heavy trucks and zodiacs, are stationed at checkpoint Alpha-2.",
-      "Disaster response team 02 is fully mobilized. All equipment checkouts are complete. Personnel are currently standing by at sector staging checkpoint Alpha-2. Vehicles are fueled and communication links to Mitigation Hub are verified active. Standard response time to any sector is estimated at 12-18 minutes.",
-      {0, 230, 118, 255}
-    },
-    {
-      "INFRASTRUCTURE", "[I]", "Sector C Bridge Structural Stress Alarm", "08:50 AM", "HIGH",
-      "Vibration analysis telemetry indicates safety limit thresholds exceeded. Speed restrictions recommended.",
-      "The structural health monitoring system on the Sector C main bridge has issued an automated stress warning. Continuous load from evacuating traffic and structural vibration from nearby seismic micro-tremors are accumulating. Engineering recommends immediately imposing a 5-ton load limit and speed caps.",
-      {255, 145, 0, 255}
-    }
-  };
+      {"BREAKING NEWS",
+       "[!]",
+       "CRITICAL FAILURE: SECTOR ALPHA FLOODGATE ACTUATORS JAMMED",
+       "10:14 AM",
+       "CRITICAL",
+       "Reservoir levels are rising at 0.5m/hr with storm systems approaching. "
+       "Manual override controls are unresponsive.",
+       "A mechanical jam has occurred in the primary hydraulic pistons of Dam "
+       "Floodgate A in Sector Alpha. Maintenance engineers are locked out of "
+       "the control room due to localized flash flooding blocking the access "
+       "road. Remote commands from the Mitigation Hub have failed. Current "
+       "predictions estimate reservoir breach in 4 hours if actuators remain "
+       "jammed. Heavy rainfall upstream continues.",
+       {255, 23, 68, 255}},
+      {"WEATHER UPDATE",
+       "[W]",
+       "Severe Storm Advisory Upgraded to Level 4",
+       "10:02 AM",
+       "HIGH",
+       "Meteorological radar confirms high precipitation intensity band "
+       "heading northeast. 120mm rainfall expected.",
+       "The National Weather Service has raised the local weather warning to "
+       "Level 4 (Severe Storm). Active precipitation levels are exceeding "
+       "models. Low-lying zones in Sector Alpha and adjacent riverbanks are "
+       "expected to experience rapid inundation within the hour. Strong winds "
+       "up to 45 knots may hinder deployment of drone sensors.",
+       {255, 145, 0, 255}},
+      {"CITIZEN REPORT",
+       "[C]",
+       "Reports of Mud Slurry on West Highway",
+       "09:45 AM",
+       "MEDIUM",
+       "Multiple commuters report mud and small boulders rolling down the "
+       "slope of Sector Beta ridge. Patrol dispatched.",
+       "Emergency dispatcher received multiple calls from citizens driving on "
+       "Route 9-West in Sector Beta. Drivers report mud, branches, and small "
+       "rocks spilling across the lanes. Local authorities are setting up "
+       "temporary caution signage. Geological sensor logs indicate ground "
+       "movement risk is elevated. Commuters advise seeking alternate routes.",
+       {255, 215, 0, 255}},
+      {"CCTV / SENSOR",
+       "[S]",
+       "Seismic Station 04 Lost Power & Data Stream",
+       "09:30 AM",
+       "MEDIUM",
+       "Sensor telemetry disconnected suddenly. Backup battery systems show "
+       "offline. Fault code: ERR_COMM_OUT.",
+       "Seismic Monitor Station 04, located on the northern slope of Mount "
+       "Vesuvius Sector B, has ceased broadcasting. Telemetry showed a sudden "
+       "voltage drop followed by complete signal loss. Inspection team cannot "
+       "confirm if this is a physical sensor damage or power circuit failure. "
+       "Seismic data from surrounding stations is still normal.",
+       {255, 215, 0, 255}},
+      {"RESCUE REPORT",
+       "[R]",
+       "Team 02 Pre-positioned in Zone B Standby",
+       "09:15 AM",
+       "LOW",
+       "All primary search and rescue assets, including heavy trucks and "
+       "zodiacs, are stationed at checkpoint Alpha-2.",
+       "Disaster response team 02 is fully mobilized. All equipment checkouts "
+       "are complete. Personnel are currently standing by at sector staging "
+       "checkpoint Alpha-2. Vehicles are fueled and communication links to "
+       "Mitigation Hub are verified active. Standard response time to any "
+       "sector is estimated at 12-18 minutes.",
+       {0, 230, 118, 255}},
+      {"INFRASTRUCTURE",
+       "[I]",
+       "Sector C Bridge Structural Stress Alarm",
+       "08:50 AM",
+       "HIGH",
+       "Vibration analysis telemetry indicates safety limit thresholds "
+       "exceeded. Speed restrictions recommended.",
+       "The structural health monitoring system on the Sector C main bridge "
+       "has issued an automated stress warning. Continuous load from "
+       "evacuating traffic and structural vibration from nearby seismic "
+       "micro-tremors are accumulating. Engineering recommends immediately "
+       "imposing a 5-ton load limit and speed caps.",
+       {255, 145, 0, 255}}};
 
   float padding = 12.0f;
   float gap = 10.0f;
@@ -636,34 +798,43 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
     bool hovered = CheckCollisionPointRec(mouse, r);
 
     // Handle click interaction
-    if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && s_selectedCommsCard == -1) {
+    if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+        s_selectedCommsCard == -1) {
       s_selectedCommsCard = index;
     }
 
     Color cardBg = hovered ? Color{36, 42, 59, 255} : Color{28, 33, 46, 255};
-    Color borderColor = isFeatured ? Color{255, 23, 68, 150} : Color{50, 60, 80, 255};
+    Color borderColor =
+        isFeatured ? Color{255, 23, 68, 150} : Color{50, 60, 80, 255};
 
     Fumbo::Graphic2D::DrawRectangleRounded(r, 0.04f, 4, cardBg);
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(r, 0.04f, 4, 1.0f, borderColor);
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(r, 0.04f, 4, 1.0f,
+                                                  borderColor);
 
     float x = r.x + 12.0f;
     float y = r.y + 12.0f;
 
     // Draw Category & icon
     std::string catStr = cards[index].icon + " " + cards[index].category;
-    Fumbo::Graphic2D::DrawText(catStr, {x, y}, font, isFeatured ? 11 : 9, {0, 230, 118, 255});
+    Fumbo::Graphic2D::DrawText(catStr, {x, y}, font, isFeatured ? 11 : 9,
+                               {0, 230, 118, 255});
 
     // Priority badge
     float badgeW = isFeatured ? 65.0f : 50.0f;
     float badgeH = isFeatured ? 18.0f : 14.0f;
-    Rectangle badgeRect = {r.x + r.width - badgeW - 12.0f, y - 2.0f, badgeW, badgeH};
-    Fumbo::Graphic2D::DrawRectangleRounded(badgeRect, 0.2f, 4, cards[index].priorityColor);
-    Fumbo::Graphic2D::DrawText(cards[index].priority, {badgeRect.x + (isFeatured ? 8.0f : 5.0f), badgeRect.y + (isFeatured ? 4.0f : 2.0f)}, font, isFeatured ? 9 : 8, WHITE);
+    Rectangle badgeRect = {r.x + r.width - badgeW - 12.0f, y - 2.0f, badgeW,
+                           badgeH};
+    Fumbo::Graphic2D::DrawRectangleRounded(badgeRect, 0.2f, 4,
+                                           cards[index].priorityColor);
+    Fumbo::Graphic2D::DrawText(cards[index].priority,
+                               {badgeRect.x + (isFeatured ? 8.0f : 5.0f),
+                                badgeRect.y + (isFeatured ? 4.0f : 2.0f)},
+                               font, isFeatured ? 9 : 8, WHITE);
 
     // Headline
     y += isFeatured ? 22.0f : 16.0f;
     float titleSize = isFeatured ? 13.0f : 10.0f;
-    
+
     // Simple headline trimmer or layout
     std::string headline = cards[index].headline;
     if (!isFeatured && headline.length() > 38) {
@@ -673,35 +844,47 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
 
     // Timestamp
     y += isFeatured ? 20.0f : 15.0f;
-    Fumbo::Graphic2D::DrawText("RECEIVED: " + cards[index].timestamp, {x, y}, font, 8, {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText("RECEIVED: " + cards[index].timestamp, {x, y},
+                               font, 8, {140, 140, 160, 255});
 
     // Divider line
     y += isFeatured ? 15.0f : 12.0f;
-    Fumbo::Graphic2D::DrawLineEx({x, y}, {r.x + r.width - 12.0f, y}, 1.0f, {60, 70, 90, 180});
+    Fumbo::Graphic2D::DrawLineEx({x, y}, {r.x + r.width - 12.0f, y}, 1.0f,
+                                 {60, 70, 90, 180});
     y += isFeatured ? 12.0f : 8.0f;
 
     // Summary lines
     if (isFeatured) {
-      Fumbo::Graphic2D::DrawText("OPERATIONAL DISPATCH SUMMARY:", {x, y}, font, 11, {255, 23, 68, 255});
+      Fumbo::Graphic2D::DrawText("OPERATIONAL DISPATCH SUMMARY:", {x, y}, font,
+                                 11, {255, 23, 68, 255});
       y += 18.0f;
-      Fumbo::Graphic2D::DrawText("- Dam actuator systems jammed in open-risk position.", {x, y}, font, 10, {210, 210, 230, 255});
+      Fumbo::Graphic2D::DrawText(
+          "- Dam actuator systems jammed in open-risk position.", {x, y}, font,
+          10, {210, 210, 230, 255});
       y += 15.0f;
-      Fumbo::Graphic2D::DrawText("- Water level rising at 0.5 meters per hour.", {x, y}, font, 10, {210, 210, 230, 255});
+      Fumbo::Graphic2D::DrawText("- Water level rising at 0.5 meters per hour.",
+                                 {x, y}, font, 10, {210, 210, 230, 255});
       y += 15.0f;
-      Fumbo::Graphic2D::DrawText("- Heavy storm fronts converging upstream.", {x, y}, font, 10, {210, 210, 230, 255});
+      Fumbo::Graphic2D::DrawText("- Heavy storm fronts converging upstream.",
+                                 {x, y}, font, 10, {210, 210, 230, 255});
       y += 24.0f;
-      Fumbo::Graphic2D::DrawText("> CLICK FOR FULL INTEL REPORT", {x, y}, font, 9, {255, 215, 0, 255});
+      Fumbo::Graphic2D::DrawText("> CLICK FOR FULL INTEL REPORT", {x, y}, font,
+                                 9, {255, 215, 0, 255});
     } else {
       std::string summary = cards[index].summary;
       if (summary.length() > 40) {
         std::string line1 = summary.substr(0, 38) + "-";
         std::string line2 = summary.substr(38);
-        if (line2.length() > 38) line2 = line2.substr(0, 35) + "...";
-        Fumbo::Graphic2D::DrawText(line1, {x, y}, font, 9, {170, 170, 190, 255});
+        if (line2.length() > 38)
+          line2 = line2.substr(0, 35) + "...";
+        Fumbo::Graphic2D::DrawText(line1, {x, y}, font, 9,
+                                   {170, 170, 190, 255});
         y += 12.0f;
-        Fumbo::Graphic2D::DrawText(line2, {x, y}, font, 9, {170, 170, 190, 255});
+        Fumbo::Graphic2D::DrawText(line2, {x, y}, font, 9,
+                                   {170, 170, 190, 255});
       } else {
-        Fumbo::Graphic2D::DrawText(summary, {x, y}, font, 9, {170, 170, 190, 255});
+        Fumbo::Graphic2D::DrawText(summary, {x, y}, font, 9,
+                                   {170, 170, 190, 255});
       }
     }
   };
@@ -729,14 +912,16 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
   float col2H = (leftH - 2.0f * gap) / 3.0f;
   Rectangle rect3 = {col2X, area.y + padding, colW, col2H};
   Rectangle rect4 = {col2X, area.y + padding + col2H + gap, colW, col2H};
-  Rectangle rect5 = {col2X, area.y + padding + 2.0f * (col2H + gap), colW, col2H};
+  Rectangle rect5 = {col2X, area.y + padding + 2.0f * (col2H + gap), colW,
+                     col2H};
   DrawCard(3, rect3, false);
   DrawCard(4, rect4, false);
   DrawCard(5, rect5, false);
 
   // --- 3. Draw Article Modal Overlay if selected ---
   if (s_selectedCommsCard >= 0 && s_selectedCommsCard < 6) {
-    Fumbo::Graphic2D::DrawRectangleRec(area, {12, 14, 21, 220}); // Dark blur overlay
+    Fumbo::Graphic2D::DrawRectangleRec(area,
+                                       {12, 14, 21, 220}); // Dark blur overlay
 
     float modalW = area.width * 0.75f;
     float modalH = area.height * 0.78f;
@@ -744,38 +929,50 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
     float modalY = area.y + (area.height - modalH) * 0.5f;
     Rectangle modalRect = {modalX, modalY, modalW, modalH};
 
-    Fumbo::Graphic2D::DrawRectangleRounded(modalRect, 0.03f, 4, {23, 27, 38, 255});
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(modalRect, 0.03f, 4, 1.5f, cards[s_selectedCommsCard].priorityColor);
+    Fumbo::Graphic2D::DrawRectangleRounded(modalRect, 0.03f, 4,
+                                           {23, 27, 38, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
+        modalRect, 0.03f, 4, 1.5f, cards[s_selectedCommsCard].priorityColor);
 
     float mx = modalX + 24.0f;
     float my = modalY + 24.0f;
 
     // Category banner
-    std::string catText = cards[s_selectedCommsCard].icon + " " + cards[s_selectedCommsCard].category;
+    std::string catText = cards[s_selectedCommsCard].icon + " " +
+                          cards[s_selectedCommsCard].category;
     Fumbo::Graphic2D::DrawText(catText, {mx, my}, font, 11, {0, 230, 118, 255});
 
     // Priority badge
     float badgeW = 75.0f;
     float badgeH = 20.0f;
-    Rectangle badgeRect = {modalX + modalW - badgeW - 24.0f, my - 2.0f, badgeW, badgeH};
-    Fumbo::Graphic2D::DrawRectangleRounded(badgeRect, 0.2f, 4, cards[s_selectedCommsCard].priorityColor);
-    Fumbo::Graphic2D::DrawText(cards[s_selectedCommsCard].priority, {badgeRect.x + 12.0f, badgeRect.y + 4.0f}, font, 9, WHITE);
+    Rectangle badgeRect = {modalX + modalW - badgeW - 24.0f, my - 2.0f, badgeW,
+                           badgeH};
+    Fumbo::Graphic2D::DrawRectangleRounded(
+        badgeRect, 0.2f, 4, cards[s_selectedCommsCard].priorityColor);
+    Fumbo::Graphic2D::DrawText(cards[s_selectedCommsCard].priority,
+                               {badgeRect.x + 12.0f, badgeRect.y + 4.0f}, font,
+                               9, WHITE);
 
     // Headline
     my += 22.0f;
-    Fumbo::Graphic2D::DrawText(cards[s_selectedCommsCard].headline, {mx, my}, font, 13, WHITE);
+    Fumbo::Graphic2D::DrawText(cards[s_selectedCommsCard].headline, {mx, my},
+                               font, 13, WHITE);
 
     // Classification stamp
     my += 20.0f;
-    Fumbo::Graphic2D::DrawText("TIME: " + cards[s_selectedCommsCard].timestamp + "  |  STATUS: CLASSIFIED INTEL", {mx, my}, font, 9, {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText("TIME: " + cards[s_selectedCommsCard].timestamp +
+                                   "  |  STATUS: CLASSIFIED INTEL",
+                               {mx, my}, font, 9, {140, 140, 160, 255});
 
     // Divider
     my += 16.0f;
-    Fumbo::Graphic2D::DrawLineEx({mx, my}, {modalX + modalW - 24.0f, my}, 1.0f, {60, 70, 90, 255});
+    Fumbo::Graphic2D::DrawLineEx({mx, my}, {modalX + modalW - 24.0f, my}, 1.0f,
+                                 {60, 70, 90, 255});
     my += 18.0f;
 
     // Full briefing title
-    Fumbo::Graphic2D::DrawText("SITUATIONAL LOG BRIEFING:", {mx, my}, font, 10, {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText("SITUATIONAL LOG BRIEFING:", {mx, my}, font, 10,
+                               {255, 215, 0, 255});
     my += 20.0f;
 
     // Wrap fullText into paragraphs
@@ -795,20 +992,24 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
       } else {
         lineStart += lineLength;
       }
-      Fumbo::Graphic2D::DrawText(line, {mx, my}, font, 10, {210, 210, 225, 255});
+      Fumbo::Graphic2D::DrawText(line, {mx, my}, font, 10,
+                                 {210, 210, 225, 255});
       my += 16.0f;
     }
 
     // Modal Close Button (Bottom Right)
     float btnW = 90.0f;
     float btnH = 26.0f;
-    Rectangle closeBtn = {modalX + modalW - btnW - 24.0f, modalY + modalH - btnH - 24.0f, btnW, btnH};
+    Rectangle closeBtn = {modalX + modalW - btnW - 24.0f,
+                          modalY + modalH - btnH - 24.0f, btnW, btnH};
     bool btnHovered = CheckCollisionPointRec(mouse, closeBtn);
 
     Color btnBg = btnHovered ? Color{60, 70, 90, 255} : Color{38, 45, 61, 255};
     Fumbo::Graphic2D::DrawRectangleRounded(closeBtn, 0.15f, 4, btnBg);
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(closeBtn, 0.15f, 4, 1.0f, {80, 90, 110, 255});
-    Fumbo::Graphic2D::DrawText("CLOSE [X]", {closeBtn.x + 18.0f, closeBtn.y + 7.0f}, font, 9, WHITE);
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(closeBtn, 0.15f, 4, 1.0f,
+                                                  {80, 90, 110, 255});
+    Fumbo::Graphic2D::DrawText(
+        "CLOSE [X]", {closeBtn.x + 18.0f, closeBtn.y + 7.0f}, font, 9, WHITE);
 
     if (btnHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       s_selectedCommsCard = -1; // Dismiss modal
@@ -827,62 +1028,77 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
 
   // --- Action Data ---
   struct ActionInfo {
-    const char* name;
-    const char* budgetImpact;
-    const char* resourceUse;
-    const char* benefits;
-    const char* drawbacks;
+    const char *name;
+    const char *budgetImpact;
+    const char *resourceUse;
+    const char *benefits;
+    const char *drawbacks;
   };
 
-  const char* tabNames[3] = {"FLOOD", "WILDFIRE", "VOLCANO"};
-  const char* tabIcons[3] = {"~", "*", "^"};
-  Color tabColors[3] = {{41, 121, 255, 255}, {255, 145, 0, 255}, {255, 23, 68, 255}};
+  const char *tabNames[3] = {"FLOOD", "WILDFIRE", "VOLCANO"};
+  const char *tabIcons[3] = {"~", "*", "^"};
+  Color tabColors[3] = {
+      {41, 121, 255, 255}, {255, 145, 0, 255}, {255, 23, 68, 255}};
 
   ActionInfo actions[3][5] = {
-    // Flood
-    {
-      {"Issue Early Warning",  "-",   "+",   "Early public awareness",     "May cause panic"},
-      {"Deploy Rescue Team",   "--",  "++",  "Direct life-saving",         "Team unavailable elsewhere"},
-      {"Open Floodgates",      "-",   "+",   "Reduce reservoir pressure",  "Downstream flooding risk"},
-      {"Close Bridge",         "-",   "+",   "Prevent casualties",         "Blocks evacuation route"},
-      {"Evacuate Residents",   "---", "+++", "Maximum safety",             "High cost & public unrest"}
-    },
-    // Wildfire
-    {
-      {"Issue Smoke Advisory",  "-",   "+",   "Public health protection", "Economic slowdown"},
-      {"Deploy Firefighters",   "--",  "++",  "Direct containment",       "Personnel at risk"},
-      {"Request Water Bomber",  "---", "+",   "Rapid fire suppression",   "Very expensive"},
-      {"Evacuate Villages",     "--",  "+++", "Civilian safety",          "Displacement costs"},
-      {"Close National Park",   "-",   "+",   "Prevent tourist deaths",   "Revenue loss"}
-    },
-    // Volcano
-    {
-      {"Raise Alert Level",     "-",   "+",   "Preparedness boost",       "Public anxiety"},
-      {"Evacuate Danger Zone",  "---", "+++", "Maximum safety",           "Massive logistics"},
-      {"Close Airport",         "--",  "+",   "Aircraft safety",          "Economic disruption"},
-      {"Prepare Shelters",      "--",  "++",  "Safe havens ready",        "Resource intensive"},
-      {"Deploy Medical Teams",  "--",  "++",  "Rapid response ready",     "Teams committed"}
-    }
-  };
+      // Flood
+      {{"Issue Early Warning", "-", "+", "Early public awareness",
+        "May cause panic"},
+       {"Deploy Rescue Team", "--", "++", "Direct life-saving",
+        "Team unavailable elsewhere"},
+       {"Open Floodgates", "-", "+", "Reduce reservoir pressure",
+        "Downstream flooding risk"},
+       {"Close Bridge", "-", "+", "Prevent casualties",
+        "Blocks evacuation route"},
+       {"Evacuate Residents", "---", "+++", "Maximum safety",
+        "High cost & public unrest"}},
+      // Wildfire
+      {{"Issue Smoke Advisory", "-", "+", "Public health protection",
+        "Economic slowdown"},
+       {"Deploy Firefighters", "--", "++", "Direct containment",
+        "Personnel at risk"},
+       {"Request Water Bomber", "---", "+", "Rapid fire suppression",
+        "Very expensive"},
+       {"Evacuate Villages", "--", "+++", "Civilian safety",
+        "Displacement costs"},
+       {"Close National Park", "-", "+", "Prevent tourist deaths",
+        "Revenue loss"}},
+      // Volcano
+      {{"Raise Alert Level", "-", "+", "Preparedness boost", "Public anxiety"},
+       {"Evacuate Danger Zone", "---", "+++", "Maximum safety",
+        "Massive logistics"},
+       {"Close Airport", "--", "+", "Aircraft safety", "Economic disruption"},
+       {"Prepare Shelters", "--", "++", "Safe havens ready",
+        "Resource intensive"},
+       {"Deploy Medical Teams", "--", "++", "Rapid response ready",
+        "Teams committed"}}};
 
   // ========== 1. RESOURCE OVERVIEW BAR ==========
   float barH = 34.0f;
-  Rectangle resBar = {area.x + padding, area.y + padding, area.width - 2 * padding, barH};
+  Rectangle resBar = {area.x + padding, area.y + padding,
+                      area.width - 2 * padding, barH};
   Fumbo::Graphic2D::DrawRectangleRounded(resBar, 0.08f, 4, {28, 33, 46, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(resBar, 0.08f, 4, 1.0f, {50, 60, 80, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(resBar, 0.08f, 4, 1.0f,
+                                                {50, 60, 80, 255});
 
   float rx = resBar.x + 14.0f;
   float ry = resBar.y + 10.0f;
   float colSpacing = (resBar.width - 28.0f) / 3.0f;
 
-  Fumbo::Graphic2D::DrawText("BUDGET:", {rx, ry}, font, 9, {150, 150, 170, 255});
-  Fumbo::Graphic2D::DrawText("$50,000", {rx + 55.0f, ry}, font, 10, {140, 255, 140, 255});
+  Fumbo::Graphic2D::DrawText("BUDGET:", {rx, ry}, font, 9,
+                             {150, 150, 170, 255});
+  Fumbo::Graphic2D::DrawText("$50,000", {rx + 55.0f, ry}, font, 10,
+                             {140, 255, 140, 255});
 
-  Fumbo::Graphic2D::DrawText("PUBLIC TRUST:", {rx + colSpacing, ry}, font, 9, {150, 150, 170, 255});
-  Fumbo::Graphic2D::DrawText("85%", {rx + colSpacing + 90.0f, ry}, font, 10, {0, 230, 118, 255});
+  Fumbo::Graphic2D::DrawText("PUBLIC TRUST:", {rx + colSpacing, ry}, font, 9,
+                             {150, 150, 170, 255});
+  Fumbo::Graphic2D::DrawText("85%", {rx + colSpacing + 90.0f, ry}, font, 10,
+                             {0, 230, 118, 255});
 
-  Fumbo::Graphic2D::DrawText("RESCUE TEAMS:", {rx + 2 * colSpacing, ry}, font, 9, {150, 150, 170, 255});
-  Fumbo::Graphic2D::DrawText("3 AVAILABLE", {rx + 2 * colSpacing + 95.0f, ry}, font, 10, {140, 180, 255, 255});
+  Fumbo::Graphic2D::DrawText("RESCUE TEAMS:", {rx + 2 * colSpacing, ry}, font,
+                             9, {150, 150, 170, 255});
+  Fumbo::Graphic2D::DrawText("3 AVAILABLE", {rx + 2 * colSpacing + 95.0f, ry},
+                             font, 10, {140, 180, 255, 255});
 
   // ========== 2. DISASTER TABS ==========
   float tabY = area.y + padding + barH + 10.0f;
@@ -891,21 +1107,28 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
   float tabH = 30.0f;
 
   for (int t = 0; t < 3; t++) {
-    Rectangle tabRect = {area.x + padding + t * (tabW + tabGap), tabY, tabW, tabH};
+    Rectangle tabRect = {area.x + padding + t * (tabW + tabGap), tabY, tabW,
+                         tabH};
     bool isActive = (t == s_mitigationTab);
     bool tabHovered = CheckCollisionPointRec(mouse, tabRect);
 
-    Color tabBg = isActive ? tabColors[t] : (tabHovered ? Color{40, 48, 65, 255} : Color{28, 33, 46, 255});
+    Color tabBg = isActive ? tabColors[t]
+                           : (tabHovered ? Color{40, 48, 65, 255}
+                                         : Color{28, 33, 46, 255});
     Fumbo::Graphic2D::DrawRectangleRounded(tabRect, 0.12f, 4, tabBg);
     if (!isActive) {
-      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(tabRect, 0.12f, 4, 1.0f, tabColors[t]);
+      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(tabRect, 0.12f, 4, 1.0f,
+                                                    tabColors[t]);
     }
 
     std::string tabLabel = std::string("[") + tabIcons[t] + "] " + tabNames[t];
     Color tabTextColor = isActive ? WHITE : tabColors[t];
     float textOff = (tabW - 10.0f * (float)tabLabel.length()) * 0.5f;
-    if (textOff < 8.0f) textOff = 8.0f;
-    Fumbo::Graphic2D::DrawText(tabLabel, {tabRect.x + textOff, tabRect.y + 9.0f}, font, 10, tabTextColor);
+    if (textOff < 8.0f)
+      textOff = 8.0f;
+    Fumbo::Graphic2D::DrawText(tabLabel,
+                               {tabRect.x + textOff, tabRect.y + 9.0f}, font,
+                               10, tabTextColor);
 
     if (tabHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       s_mitigationTab = t;
@@ -923,10 +1146,14 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
 
   // --- LEFT PANEL: Available Actions ---
   Rectangle leftPanel = {leftX, contentY, leftW, contentH};
-  Fumbo::Graphic2D::DrawRectangleRounded(leftPanel, 0.03f, 4, {23, 27, 38, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(leftPanel, 0.03f, 4, 1.0f, {50, 60, 80, 255});
+  Fumbo::Graphic2D::DrawRectangleRounded(leftPanel, 0.03f, 4,
+                                         {23, 27, 38, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(leftPanel, 0.03f, 4, 1.0f,
+                                                {50, 60, 80, 255});
 
-  Fumbo::Graphic2D::DrawText("AVAILABLE ACTIONS", {leftX + 12.0f, contentY + 10.0f}, font, 10, tabColors[tab]);
+  Fumbo::Graphic2D::DrawText("AVAILABLE ACTIONS",
+                             {leftX + 12.0f, contentY + 10.0f}, font, 10,
+                             tabColors[tab]);
 
   float actionY = contentY + 32.0f;
   float actionH = 30.0f;
@@ -937,26 +1164,37 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     bool hovered = CheckCollisionPointRec(mouse, actionRect);
     bool queued = s_queuedActions[tab][i];
 
-    Color bg = queued ? Color{25, 50, 35, 255} : (hovered ? Color{36, 42, 59, 255} : Color{26, 30, 42, 255});
+    Color bg =
+        queued ? Color{25, 50, 35, 255}
+               : (hovered ? Color{36, 42, 59, 255} : Color{26, 30, 42, 255});
     Fumbo::Graphic2D::DrawRectangleRounded(actionRect, 0.06f, 4, bg);
 
     if (queued) {
-      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(actionRect, 0.06f, 4, 1.0f, {0, 230, 118, 200});
+      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(actionRect, 0.06f, 4, 1.0f,
+                                                    {0, 230, 118, 200});
     } else if (hovered) {
-      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(actionRect, 0.06f, 4, 1.0f, {80, 90, 110, 200});
+      Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(actionRect, 0.06f, 4, 1.0f,
+                                                    {80, 90, 110, 200});
     }
 
     // Checkbox
     std::string checkStr = queued ? "[x]" : "[ ]";
-    Color checkColor = queued ? Color{0, 230, 118, 255} : Color{120, 120, 150, 255};
-    Fumbo::Graphic2D::DrawText(checkStr, {actionRect.x + 8.0f, actionRect.y + 8.0f}, font, 10, checkColor);
+    Color checkColor =
+        queued ? Color{0, 230, 118, 255} : Color{120, 120, 150, 255};
+    Fumbo::Graphic2D::DrawText(checkStr,
+                               {actionRect.x + 8.0f, actionRect.y + 8.0f}, font,
+                               10, checkColor);
 
     // Action name
-    Fumbo::Graphic2D::DrawText(actions[tab][i].name, {actionRect.x + 40.0f, actionRect.y + 8.0f}, font, 10, {210, 210, 230, 255});
+    Fumbo::Graphic2D::DrawText(actions[tab][i].name,
+                               {actionRect.x + 40.0f, actionRect.y + 8.0f},
+                               font, 10, {210, 210, 230, 255});
 
     // Cost indicator on the right
     std::string costStr = "COST: " + std::string(actions[tab][i].budgetImpact);
-    Fumbo::Graphic2D::DrawText(costStr, {actionRect.x + actionRect.width - 90.0f, actionRect.y + 8.0f}, font, 9, {255, 140, 140, 255});
+    Fumbo::Graphic2D::DrawText(
+        costStr, {actionRect.x + actionRect.width - 90.0f, actionRect.y + 8.0f},
+        font, 9, {255, 140, 140, 255});
 
     // Toggle on click
     if (hovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -977,50 +1215,70 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
   if (previewH > 50.0f && s_hoveredMitAction >= 0 && s_hoveredMitAction < 5) {
     int ai = s_hoveredMitAction;
     Rectangle previewRect = {leftX + 6.0f, previewY, leftW - 12.0f, previewH};
-    Fumbo::Graphic2D::DrawRectangleRounded(previewRect, 0.04f, 4, {18, 22, 32, 255});
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(previewRect, 0.04f, 4, 1.0f, {60, 70, 90, 200});
+    Fumbo::Graphic2D::DrawRectangleRounded(previewRect, 0.04f, 4,
+                                           {18, 22, 32, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(previewRect, 0.04f, 4, 1.0f,
+                                                  {60, 70, 90, 200});
 
     float px = previewRect.x + 12.0f;
     float py = previewRect.y + 10.0f;
 
-    Fumbo::Graphic2D::DrawText("ACTION PREVIEW", {px, py}, font, 10, {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText("ACTION PREVIEW", {px, py}, font, 10,
+                               {255, 215, 0, 255});
     py += 18.0f;
 
-    Fumbo::Graphic2D::DrawLineEx({px, py}, {px + previewRect.width - 24.0f, py}, 1.0f, {50, 60, 80, 180});
+    Fumbo::Graphic2D::DrawLineEx({px, py}, {px + previewRect.width - 24.0f, py},
+                                 1.0f, {50, 60, 80, 180});
     py += 10.0f;
 
-    Fumbo::Graphic2D::DrawText("Budget Impact:", {px, py}, font, 9, {150, 150, 170, 255});
-    Fumbo::Graphic2D::DrawText(actions[tab][ai].budgetImpact, {px + 100.0f, py}, font, 10, {255, 140, 140, 255});
+    Fumbo::Graphic2D::DrawText("Budget Impact:", {px, py}, font, 9,
+                               {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText(actions[tab][ai].budgetImpact, {px + 100.0f, py},
+                               font, 10, {255, 140, 140, 255});
     py += 16.0f;
 
-    Fumbo::Graphic2D::DrawText("Resource Use:", {px, py}, font, 9, {150, 150, 170, 255});
-    Fumbo::Graphic2D::DrawText(actions[tab][ai].resourceUse, {px + 100.0f, py}, font, 10, {140, 180, 255, 255});
+    Fumbo::Graphic2D::DrawText("Resource Use:", {px, py}, font, 9,
+                               {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText(actions[tab][ai].resourceUse, {px + 100.0f, py},
+                               font, 10, {140, 180, 255, 255});
     py += 16.0f;
 
-    Fumbo::Graphic2D::DrawText("Benefits:", {px, py}, font, 9, {150, 150, 170, 255});
-    Fumbo::Graphic2D::DrawText(actions[tab][ai].benefits, {px + 100.0f, py}, font, 10, {0, 230, 118, 255});
+    Fumbo::Graphic2D::DrawText("Benefits:", {px, py}, font, 9,
+                               {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText(actions[tab][ai].benefits, {px + 100.0f, py},
+                               font, 10, {0, 230, 118, 255});
     py += 16.0f;
 
-    Fumbo::Graphic2D::DrawText("Drawbacks:", {px, py}, font, 9, {150, 150, 170, 255});
-    Fumbo::Graphic2D::DrawText(actions[tab][ai].drawbacks, {px + 100.0f, py}, font, 10, {255, 100, 100, 255});
+    Fumbo::Graphic2D::DrawText("Drawbacks:", {px, py}, font, 9,
+                               {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText(actions[tab][ai].drawbacks, {px + 100.0f, py},
+                               font, 10, {255, 100, 100, 255});
   } else if (previewH > 30.0f && s_hoveredMitAction < 0) {
     Rectangle previewRect = {leftX + 6.0f, previewY, leftW - 12.0f, previewH};
-    Fumbo::Graphic2D::DrawRectangleRounded(previewRect, 0.04f, 4, {18, 22, 32, 255});
+    Fumbo::Graphic2D::DrawRectangleRounded(previewRect, 0.04f, 4,
+                                           {18, 22, 32, 255});
     float px = previewRect.x + 12.0f;
     float py = previewRect.y + previewH * 0.5f - 6.0f;
-    Fumbo::Graphic2D::DrawText("Hover over an action to see details", {px, py}, font, 9, {90, 90, 120, 255});
+    Fumbo::Graphic2D::DrawText("Hover over an action to see details", {px, py},
+                               font, 9, {90, 90, 120, 255});
   }
 
   // ========== 4. RIGHT PANEL: Today's Action Queue ==========
   Rectangle rightPanel = {rightX, contentY, rightW, contentH};
-  Fumbo::Graphic2D::DrawRectangleRounded(rightPanel, 0.03f, 4, {23, 27, 38, 255});
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(rightPanel, 0.03f, 4, 1.0f, {50, 60, 80, 255});
+  Fumbo::Graphic2D::DrawRectangleRounded(rightPanel, 0.03f, 4,
+                                         {23, 27, 38, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(rightPanel, 0.03f, 4, 1.0f,
+                                                {50, 60, 80, 255});
 
-  Fumbo::Graphic2D::DrawText("TODAY'S ACTION QUEUE", {rightX + 12.0f, contentY + 10.0f}, font, 10, {255, 215, 0, 255});
+  Fumbo::Graphic2D::DrawText("TODAY'S ACTION QUEUE",
+                             {rightX + 12.0f, contentY + 10.0f}, font, 10,
+                             {255, 215, 0, 255});
 
   // Divider below header
   float qDivY = contentY + 30.0f;
-  Fumbo::Graphic2D::DrawLineEx({rightX + 10.0f, qDivY}, {rightX + rightW - 10.0f, qDivY}, 1.0f, {50, 60, 80, 180});
+  Fumbo::Graphic2D::DrawLineEx({rightX + 10.0f, qDivY},
+                               {rightX + rightW - 10.0f, qDivY}, 1.0f,
+                               {50, 60, 80, 180});
 
   float queueY = qDivY + 8.0f;
   int queueCount = 0;
@@ -1028,17 +1286,21 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
   for (int t = 0; t < 3; t++) {
     bool hasItemsInTab = false;
     for (int a = 0; a < 5; a++) {
-      if (s_queuedActions[t][a]) hasItemsInTab = true;
+      if (s_queuedActions[t][a])
+        hasItemsInTab = true;
     }
-    if (!hasItemsInTab) continue;
+    if (!hasItemsInTab)
+      continue;
 
     // Tab section label
     std::string secLabel = std::string("[") + tabIcons[t] + "] " + tabNames[t];
-    Fumbo::Graphic2D::DrawText(secLabel, {rightX + 12.0f, queueY}, font, 9, tabColors[t]);
+    Fumbo::Graphic2D::DrawText(secLabel, {rightX + 12.0f, queueY}, font, 9,
+                               tabColors[t]);
     queueY += 16.0f;
 
     for (int a = 0; a < 5; a++) {
-      if (!s_queuedActions[t][a]) continue;
+      if (!s_queuedActions[t][a])
+        continue;
 
       Rectangle qItemRect = {rightX + 8.0f, queueY, rightW - 16.0f, 24.0f};
       bool qHovered = CheckCollisionPointRec(mouse, qItemRect);
@@ -1047,18 +1309,24 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
       Fumbo::Graphic2D::DrawRectangleRounded(qItemRect, 0.06f, 4, qBg);
 
       // Colored left accent
-      Rectangle accent = {qItemRect.x, qItemRect.y + 2.0f, 3.0f, qItemRect.height - 4.0f};
+      Rectangle accent = {qItemRect.x, qItemRect.y + 2.0f, 3.0f,
+                          qItemRect.height - 4.0f};
       Fumbo::Graphic2D::DrawRectangleRec(accent, tabColors[t]);
 
       // Action name
       std::string aName = actions[t][a].name;
-      if (aName.length() > 24) aName = aName.substr(0, 21) + "...";
-      Fumbo::Graphic2D::DrawText(aName, {qItemRect.x + 10.0f, qItemRect.y + 6.0f}, font, 9, {210, 210, 230, 255});
+      if (aName.length() > 24)
+        aName = aName.substr(0, 21) + "...";
+      Fumbo::Graphic2D::DrawText(aName,
+                                 {qItemRect.x + 10.0f, qItemRect.y + 6.0f},
+                                 font, 9, {210, 210, 230, 255});
 
       // Remove button
       float removeX = qItemRect.x + qItemRect.width - 26.0f;
-      Color removeColor = qHovered ? Color{255, 80, 80, 255} : Color{120, 120, 150, 255};
-      Fumbo::Graphic2D::DrawText("[X]", {removeX, qItemRect.y + 6.0f}, font, 9, removeColor);
+      Color removeColor =
+          qHovered ? Color{255, 80, 80, 255} : Color{120, 120, 150, 255};
+      Fumbo::Graphic2D::DrawText("[X]", {removeX, qItemRect.y + 6.0f}, font, 9,
+                                 removeColor);
 
       if (qHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         s_queuedActions[t][a] = false;
@@ -1072,65 +1340,102 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
 
   if (queueCount == 0) {
     float emptyY = qDivY + 30.0f;
-    Fumbo::Graphic2D::DrawText("No actions queued.", {rightX + 12.0f, emptyY}, font, 9, {120, 120, 150, 255});
-    Fumbo::Graphic2D::DrawText("Select actions from the", {rightX + 12.0f, emptyY + 18.0f}, font, 9, {100, 100, 130, 255});
-    Fumbo::Graphic2D::DrawText("left panel to queue them.", {rightX + 12.0f, emptyY + 36.0f}, font, 9, {100, 100, 130, 255});
+    Fumbo::Graphic2D::DrawText("No actions queued.", {rightX + 12.0f, emptyY},
+                               font, 9, {120, 120, 150, 255});
+    Fumbo::Graphic2D::DrawText("Select actions from the",
+                               {rightX + 12.0f, emptyY + 18.0f}, font, 9,
+                               {100, 100, 130, 255});
+    Fumbo::Graphic2D::DrawText("left panel to queue them.",
+                               {rightX + 12.0f, emptyY + 36.0f}, font, 9,
+                               {100, 100, 130, 255});
   }
 
   // --- END SHIFT BUTTON ---
   float btnW = rightW - 24.0f;
   float btnH = 34.0f;
-  Rectangle endBtn = {rightX + 12.0f, contentY + contentH - btnH - 12.0f, btnW, btnH};
+  Rectangle endBtn = {rightX + 12.0f, contentY + contentH - btnH - 12.0f, btnW,
+                      btnH};
   bool endHovered = CheckCollisionPointRec(mouse, endBtn);
 
-  Color endBg = (queueCount > 0)
-    ? (endHovered ? Color{200, 40, 40, 255} : Color{160, 25, 25, 255})
-    : Color{50, 50, 60, 255};
+  Color endBg = (queueCount > 0) ? (endHovered ? Color{200, 40, 40, 255}
+                                               : Color{160, 25, 25, 255})
+                                 : Color{50, 50, 60, 255};
   Fumbo::Graphic2D::DrawRectangleRounded(endBtn, 0.1f, 4, endBg);
-  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(endBtn, 0.1f, 4, 1.2f,
-    queueCount > 0 ? Color{255, 80, 80, 255} : Color{70, 70, 85, 255});
+  Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
+      endBtn, 0.1f, 4, 1.2f,
+      queueCount > 0 ? Color{255, 80, 80, 255} : Color{70, 70, 85, 255});
 
   Color btnTextColor = queueCount > 0 ? WHITE : Color{100, 100, 110, 255};
-  Fumbo::Graphic2D::DrawText("LOCK DECISIONS & END SHIFT", {endBtn.x + 12.0f, endBtn.y + 10.0f}, font, 10, btnTextColor);
+  Fumbo::Graphic2D::DrawText("LOCK DECISIONS & END SHIFT",
+                             {endBtn.x + 12.0f, endBtn.y + 10.0f}, font, 10,
+                             btnTextColor);
 
   // Queue count badge
   if (queueCount > 0) {
     std::string countStr = "[" + std::to_string(queueCount) + "]";
-    Fumbo::Graphic2D::DrawText(countStr, {endBtn.x + btnW - 30.0f, endBtn.y + 10.0f}, font, 10, {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText(countStr,
+                               {endBtn.x + btnW - 30.0f, endBtn.y + 10.0f},
+                               font, 10, {255, 215, 0, 255});
   }
 
   if (s_showEndShiftConfirm && queueCount > 0) {
     Fumbo::Graphic2D::DrawRectangleRec(area, {12, 14, 21, 220});
-    Rectangle modalRect = {area.x + 70.0f, area.y + 70.0f, area.width - 140.0f, area.height - 140.0f};
-    Fumbo::Graphic2D::DrawRectangleRounded(modalRect, 0.04f, 4, {24, 29, 40, 255});
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(modalRect, 0.04f, 4, 1.2f, {255, 80, 80, 255});
+    Rectangle modalRect = {area.x + 70.0f, area.y + 70.0f, area.width - 140.0f,
+                           area.height - 140.0f};
+    Fumbo::Graphic2D::DrawRectangleRounded(modalRect, 0.04f, 4,
+                                           {24, 29, 40, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(modalRect, 0.04f, 4, 1.2f,
+                                                  {255, 80, 80, 255});
 
-    Fumbo::Graphic2D::DrawText("END SHIFT CONFIRMATION", {modalRect.x + 16.0f, modalRect.y + 16.0f}, font, 11, {255, 215, 0, 255});
-    Fumbo::Graphic2D::DrawText("Lock the current decisions and submit them to the shift audit trail?", {modalRect.x + 16.0f, modalRect.y + 48.0f}, font, 10, {220, 220, 235, 255});
-    Fumbo::Graphic2D::DrawText("This action cannot be edited once confirmed.", {modalRect.x + 16.0f, modalRect.y + 68.0f}, font, 9, {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText("END SHIFT CONFIRMATION",
+                               {modalRect.x + 16.0f, modalRect.y + 16.0f}, font,
+                               11, {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText(
+        "Lock the current decisions and submit them to the shift audit trail?",
+        {modalRect.x + 16.0f, modalRect.y + 48.0f}, font, 10,
+        {220, 220, 235, 255});
+    Fumbo::Graphic2D::DrawText("This action cannot be edited once confirmed.",
+                               {modalRect.x + 16.0f, modalRect.y + 68.0f}, font,
+                               9, {150, 150, 170, 255});
 
-    Rectangle confirmBtn = {modalRect.x + 16.0f, modalRect.y + modalRect.height - 44.0f, 92.0f, 28.0f};
-    Rectangle cancelBtn = {modalRect.x + modalRect.width - 108.0f, modalRect.y + modalRect.height - 44.0f, 92.0f, 28.0f};
+    Rectangle confirmBtn = {modalRect.x + 16.0f,
+                            modalRect.y + modalRect.height - 44.0f, 92.0f,
+                            28.0f};
+    Rectangle cancelBtn = {modalRect.x + modalRect.width - 108.0f,
+                           modalRect.y + modalRect.height - 44.0f, 92.0f,
+                           28.0f};
 
     bool confirmHovered = CheckCollisionPointRec(mouse, confirmBtn);
     bool cancelHovered = CheckCollisionPointRec(mouse, cancelBtn);
 
-    Fumbo::Graphic2D::DrawRectangleRounded(confirmBtn, 0.12f, 4, confirmHovered ? Color{40, 120, 80, 255} : Color{28, 92, 60, 255});
-    Fumbo::Graphic2D::DrawRectangleRounded(cancelBtn, 0.12f, 4, cancelHovered ? Color{80, 80, 95, 255} : Color{50, 55, 70, 255});
-    Fumbo::Graphic2D::DrawText("CONFIRM", {confirmBtn.x + 20.0f, confirmBtn.y + 8.0f}, font, 9, WHITE);
-    Fumbo::Graphic2D::DrawText("CANCEL", {cancelBtn.x + 24.0f, cancelBtn.y + 8.0f}, font, 9, WHITE);
+    Fumbo::Graphic2D::DrawRectangleRounded(
+        confirmBtn, 0.12f, 4,
+        confirmHovered ? Color{40, 120, 80, 255} : Color{28, 92, 60, 255});
+    Fumbo::Graphic2D::DrawRectangleRounded(
+        cancelBtn, 0.12f, 4,
+        cancelHovered ? Color{80, 80, 95, 255} : Color{50, 55, 70, 255});
+    Fumbo::Graphic2D::DrawText(
+        "CONFIRM", {confirmBtn.x + 20.0f, confirmBtn.y + 8.0f}, font, 9, WHITE);
+    Fumbo::Graphic2D::DrawText(
+        "CANCEL", {cancelBtn.x + 24.0f, cancelBtn.y + 8.0f}, font, 9, WHITE);
 
     if (confirmHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       for (int t = 0; t < 3; t++) {
         for (int a = 0; a < 5; a++) {
-          if (!s_queuedActions[t][a]) continue;
-          std::string disaster = (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
-          std::string sector = (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
-          AddDecisionLogEntry(actions[t][a].name, disaster, sector, "Completed",
-                              (std::string(actions[t][a].budgetImpact) == "---" || std::string(actions[t][a].budgetImpact) == "--" || std::string(actions[t][a].budgetImpact) == "-"
-                                   ? "$5,000"
-                                   : "$10,000"),
-                              "Action executed during the shift");
+          if (!s_queuedActions[t][a])
+            continue;
+          std::string disaster =
+              (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
+          std::string sector =
+              (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
+          AddDecisionLogEntry(
+              actions[t][a].name, disaster, sector, "Completed",
+              (std::string(actions[t][a].budgetImpact) == "---" ||
+                       std::string(actions[t][a].budgetImpact) == "--" ||
+                       std::string(actions[t][a].budgetImpact) == "-"
+                   ? "$5,000"
+                   : "$10,000"),
+              "Action executed during the shift");
         }
       }
       for (int t = 0; t < 3; t++)
@@ -1140,7 +1445,8 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     } else if (cancelHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       s_showEndShiftConfirm = false;
     }
-  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && queueCount > 0) {
+  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+             queueCount > 0) {
     s_showEndShiftConfirm = true;
   }
 }
@@ -1150,33 +1456,52 @@ void DemoDesktop::DrawStatusBar() {
   float barHeight = 30.0f;
 
   // Background
-  Fumbo::Graphic2D::DrawRectangleRec({0.0f, 0.0f, screenWidth, barHeight}, {25, 29, 38, 235});
+  Fumbo::Graphic2D::DrawRectangleRec({0.0f, 0.0f, screenWidth, barHeight},
+                                     {192, 192, 192, 255});
   // Bottom Border
-  Fumbo::Graphic2D::DrawLineEx({0.0f, barHeight}, {screenWidth, barHeight}, 1.2f, {55, 62, 78, 255});
+  Fumbo::Graphic2D::DrawLineEx({0.0f, barHeight - 1.0f}, {screenWidth, barHeight - 1.0f},
+                               1.0f, {128, 128, 128, 255});
 
   Font font = GetFontDefault();
   float textY = 8.0f;
 
+  auto DrawInsetBox = [](Rectangle r) {
+    Fumbo::Graphic2D::DrawRectangleRec(r, {192, 192, 192, 255});
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x + r.width, r.y}, 1.0f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y}, {r.x, r.y + r.height}, 1.0f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({r.x + r.width - 1.0f, r.y}, {r.x + r.width - 1.0f, r.y + r.height}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({r.x, r.y + r.height - 1.0f}, {r.x + r.width, r.y + r.height - 1.0f}, 1.0f, WHITE);
+  };
+
   // 1. Day Counter
+  DrawInsetBox({10.0f, 4.0f, 150.0f, 22.0f});
   std::string dayText = "DAY: " + std::to_string(m_day);
-  Fumbo::Graphic2D::DrawText(dayText, {20.0f, textY}, font, 12, {200, 200, 230, 255});
+  Fumbo::Graphic2D::DrawText(dayText, {20.0f, textY}, font, 12, BLACK);
 
   // 2. City Status
-  Fumbo::Graphic2D::DrawText("CITY STATUS: ", {200.0f, textY}, font, 12, {150, 150, 170, 255});
-  Color statusColor = {0, 230, 118, 255}; // Green
-  if (m_cityStatus == "ALERT") statusColor = {255, 145, 0, 255}; // Orange
-  else if (m_cityStatus == "CRITICAL" || m_cityStatus == "EVACUATE") statusColor = {255, 23, 68, 255}; // Red
+  DrawInsetBox({180.0f, 4.0f, 380.0f, 22.0f});
+  Fumbo::Graphic2D::DrawText("CITY STATUS: ", {190.0f, textY}, font, 12, BLACK);
+  Color statusColor = {0, 128, 0, 255}; // Green
+  if (m_cityStatus == "ALERT")
+    statusColor = {215, 100, 0, 255}; // Orange
+  else if (m_cityStatus == "CRITICAL" || m_cityStatus == "EVACUATE")
+    statusColor = {180, 0, 0, 255}; // Red
   Fumbo::Graphic2D::DrawText(m_cityStatus, {290.0f, textY}, font, 12, statusColor);
 
   // 3. Budget
-  std::string budgetText = "BUDGET: $" + std::to_string(m_budget);
-  Fumbo::Graphic2D::DrawText(budgetText, {600.0f, textY}, font, 12, {140, 255, 140, 255});
+  DrawInsetBox({580.0f, 4.0f, 320.0f, 22.0f});
+  Fumbo::Graphic2D::DrawText("BUDGET: ", {590.0f, textY}, font, 12, BLACK);
+  std::string budgetValText = "$" + std::to_string(m_budget);
+  Fumbo::Graphic2D::DrawText(budgetValText, {660.0f, textY}, font, 12, {0, 128, 0, 255});
 
   // 4. Public Trust
-  Fumbo::Graphic2D::DrawText("PUBLIC TRUST: ", {950.0f, textY}, font, 12, {150, 150, 170, 255});
+  DrawInsetBox({920.0f, 4.0f, 320.0f, 22.0f});
+  Fumbo::Graphic2D::DrawText("PUBLIC TRUST: ", {930.0f, textY}, font, 12, BLACK);
   std::string trustText = std::to_string(m_publicTrust) + "%";
-  Color trustColor = {0, 230, 118, 255};
-  if (m_publicTrust < 35) trustColor = {255, 23, 68, 255};
-  else if (m_publicTrust < 70) trustColor = {255, 145, 0, 255};
-  Fumbo::Graphic2D::DrawText(trustText, {1050.0f, textY}, font, 12, trustColor);
+  Color trustColor = {0, 128, 0, 255};
+  if (m_publicTrust < 35)
+    trustColor = {180, 0, 0, 255};
+  else if (m_publicTrust < 70)
+    trustColor = {215, 100, 0, 255};
+  Fumbo::Graphic2D::DrawText(trustText, {1040.0f, textY}, font, 12, trustColor);
 }

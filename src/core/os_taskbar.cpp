@@ -216,18 +216,32 @@ void Taskbar::Draw() {
   Color startColor = m_startHover || m_startMenuOpen
                          ? m_style.startButtonHoverColor
                          : m_style.startButtonColor;
-  Fumbo::Graphic2D::DrawRectangleRounded(startBtn, 0.15f, 4, startColor);
+  
+  // Draw Start button body
+  Fumbo::Graphic2D::DrawRectangleRec(startBtn, startColor);
 
-  // Start button text
+  // 3D borders for Start button (depressed if start menu open)
+  bool startPressed = m_startMenuOpen;
+  if (startPressed) {
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x, startBtn.y}, {startBtn.x + startBtn.width, startBtn.y}, 1.0f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x, startBtn.y}, {startBtn.x, startBtn.y + startBtn.height}, 1.0f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x + startBtn.width - 1, startBtn.y}, {startBtn.x + startBtn.width - 1, startBtn.y + startBtn.height}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x, startBtn.y + startBtn.height - 1}, {startBtn.x + startBtn.width, startBtn.y + startBtn.height - 1}, 1.0f, WHITE);
+  } else {
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x, startBtn.y}, {startBtn.x + startBtn.width, startBtn.y}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x, startBtn.y}, {startBtn.x, startBtn.y + startBtn.height}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x + startBtn.width - 1, startBtn.y}, {startBtn.x + startBtn.width - 1, startBtn.y + startBtn.height}, 1.0f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({startBtn.x, startBtn.y + startBtn.height - 1}, {startBtn.x + startBtn.width, startBtn.y + startBtn.height - 1}, 1.0f, {128, 128, 128, 255});
+  }
+
+  // Start button text (centered on the button)
+  float textOffsetY = startPressed ? 1.0f : 0.0f;
   float textY =
-      startBtn.y + (startBtn.height - m_style.fontSize) * 0.5f;
-  Fumbo::Graphic2D::DrawText("Start", {startBtn.x + 20.0f, textY}, m_font,
-                             m_style.fontSize, m_style.textColor);
-
-  // A small icon/symbol on start button
-  float dotY = startBtn.y + startBtn.height * 0.5f;
-  Fumbo::Graphic2D::DrawCircleV({startBtn.x + 10.0f, dotY}, 3.5f,
-                                m_style.textColor);
+      startBtn.y + (startBtn.height - m_style.fontSize) * 0.5f + textOffsetY;
+  Vector2 textSize = MeasureTextEx(m_font, "Start", m_style.fontSize, 1.0f);
+  float textX = startBtn.x + (startBtn.width - textSize.x) * 0.5f + textOffsetY;
+  Fumbo::Graphic2D::DrawText("Start", {textX, textY}, m_font,
+                             m_style.fontSize, BLACK);
 
   auto &wm = WindowManager::Instance();
   auto openIds = wm.GetOpenWindowIds();
@@ -246,22 +260,37 @@ void Taskbar::Draw() {
 
     // Background color
     Color bgColor = m_style.itemColor;
-    if (w->IsFocused() && w->IsVisible())
+    bool itemPressed = w->IsFocused() && w->IsVisible();
+    if (itemPressed)
       bgColor = m_style.itemActiveColor;
     else if (m_windowItemHoverId == id)
       bgColor = m_style.itemHoverColor;
 
-    Fumbo::Graphic2D::DrawRectangleRounded(itemRect, 0.1f, 4, bgColor);
+    Fumbo::Graphic2D::DrawRectangleRec(itemRect, bgColor);
+
+    // 3D borders for taskbar item
+    if (itemPressed) {
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x, itemRect.y}, {itemRect.x + itemRect.width, itemRect.y}, 1.0f, {128, 128, 128, 255});
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x, itemRect.y}, {itemRect.x, itemRect.y + itemRect.height}, 1.0f, {128, 128, 128, 255});
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x + itemRect.width - 1, itemRect.y}, {itemRect.x + itemRect.width - 1, itemRect.y + itemRect.height}, 1.0f, WHITE);
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x, itemRect.y + itemRect.height - 1}, {itemRect.x + itemRect.width, itemRect.y + itemRect.height - 1}, 1.0f, WHITE);
+    } else {
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x, itemRect.y}, {itemRect.x + itemRect.width, itemRect.y}, 1.0f, WHITE);
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x, itemRect.y}, {itemRect.x, itemRect.y + itemRect.height}, 1.0f, WHITE);
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x + itemRect.width - 1, itemRect.y}, {itemRect.x + itemRect.width - 1, itemRect.y + itemRect.height}, 1.0f, {128, 128, 128, 255});
+      Fumbo::Graphic2D::DrawLineEx({itemRect.x, itemRect.y + itemRect.height - 1}, {itemRect.x + itemRect.width, itemRect.y + itemRect.height - 1}, 1.0f, {128, 128, 128, 255});
+    }
 
     // Window title (truncated)
     std::string title = w->GetTitle();
     if (title.length() > 16)
       title = title.substr(0, 14) + "..";
 
+    float titleShift = itemPressed ? 1.0f : 0.0f;
     float textItemY =
-        itemRect.y + (itemRect.height - m_style.fontSize) * 0.5f;
-    Fumbo::Graphic2D::DrawText(title, {itemRect.x + 8.0f, textItemY}, m_font,
-                               m_style.fontSize, m_style.textColor);
+        itemRect.y + (itemRect.height - m_style.fontSize) * 0.5f + titleShift;
+    Fumbo::Graphic2D::DrawText(title, {itemRect.x + 8.0f + titleShift, textItemY}, m_font,
+                               m_style.fontSize, BLACK);
 
     itemX += m_style.windowItemWidth + m_style.itemSpacing;
     if (itemX + m_style.windowItemWidth > listArea.x + listArea.width)
@@ -282,17 +311,14 @@ void Taskbar::Draw() {
   if (m_startMenuOpen && !m_startMenuItems.empty()) {
     Rectangle menuRect = GetStartMenuRect();
 
-    // Shadow
-    Rectangle shadowRect = {menuRect.x + 3.0f, menuRect.y + 3.0f,
-                            menuRect.width, menuRect.height};
-    Fumbo::Graphic2D::DrawRectangleRounded(shadowRect, 0.03f, 4,
-                                           {0, 0, 0, 80});
-
-    // Background
-    Fumbo::Graphic2D::DrawRectangleRounded(menuRect, 0.03f, 4,
-                                           m_style.startMenuBg);
-    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
-        menuRect, 0.03f, 4, 1.0f, m_style.startMenuBorder);
+    // Background (no shadow, flat rect with classic 3D border)
+    Fumbo::Graphic2D::DrawRectangleRec(menuRect, m_style.startMenuBg);
+    
+    // Draw 3D raised border for start menu
+    Fumbo::Graphic2D::DrawLineEx({menuRect.x, menuRect.y}, {menuRect.x + menuRect.width, menuRect.y}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({menuRect.x, menuRect.y}, {menuRect.x, menuRect.y + menuRect.height}, 1.0f, WHITE);
+    Fumbo::Graphic2D::DrawLineEx({menuRect.x + menuRect.width - 1, menuRect.y}, {menuRect.x + menuRect.width - 1, menuRect.y + menuRect.height}, 1.0f, {128, 128, 128, 255});
+    Fumbo::Graphic2D::DrawLineEx({menuRect.x, menuRect.y + menuRect.height - 1}, {menuRect.x + menuRect.width, menuRect.y + menuRect.height - 1}, 1.0f, {128, 128, 128, 255});
 
     // Items
     float itemMenuY = menuRect.y + 4.0f;
@@ -300,9 +326,10 @@ void Taskbar::Draw() {
       Rectangle itemRect = {menuRect.x + 4.0f, itemMenuY,
                             menuRect.width - 8.0f, m_style.startMenuItemHeight};
 
+      Color itemTextColor = m_style.textColor;
       if (i == m_startMenuHoverIndex) {
-        Fumbo::Graphic2D::DrawRectangleRounded(itemRect, 0.1f, 4,
-                                               m_style.startMenuItemHover);
+        Fumbo::Graphic2D::DrawRectangleRec(itemRect, m_style.startMenuItemHover);
+        itemTextColor = WHITE; // Hovered menu item has white text in Win95
       }
 
       // Icon
@@ -320,7 +347,7 @@ void Taskbar::Draw() {
                      (m_style.startMenuItemHeight - m_style.startMenuFontSize) * 0.5f;
       Fumbo::Graphic2D::DrawText(m_startMenuItems[i].label,
                                  {textStartX, labelY}, m_font,
-                                 m_style.startMenuFontSize, m_style.textColor);
+                                 m_style.startMenuFontSize, itemTextColor);
 
       itemMenuY += m_style.startMenuItemHeight;
     }
