@@ -22,6 +22,11 @@ void DemoDesktop::Init() {
   m_budget = 50000;
   m_publicTrust = 85;
   m_cityStatus = "ALERT";
+  m_shiftNumber = 1;
+  m_currentTimeWindowIndex = 0;
+  m_currentTimeLabel = "08:00";
+  m_shiftSummaryVisible = false;
+  m_shiftBriefingVisible = false;
   m_decisionLog.clear();
   m_selectedDecisionLogEntry = -1;
   m_decisionLogScroll = 0;
@@ -93,6 +98,30 @@ void DemoDesktop::Init() {
   m_desktop->SetWallpaper(m_wallpaper);
 }
 
+std::string DemoDesktop::GetCurrentTimeLabel() const { return m_currentTimeLabel; }
+
+void DemoDesktop::AdvanceTimeWindow() {
+  if (m_currentTimeWindowIndex < 3) {
+    m_currentTimeWindowIndex++;
+  }
+
+  const char *times[] = {"08:00", "11:00", "14:00", "17:00"};
+  m_currentTimeLabel = times[m_currentTimeWindowIndex];
+
+  if (m_currentTimeWindowIndex == 1) {
+    m_cityStatus = "WATCH";
+    m_publicTrust = std::max(0, m_publicTrust - 2);
+  } else if (m_currentTimeWindowIndex == 2) {
+    m_cityStatus = "CRITICAL";
+    m_publicTrust = std::max(0, m_publicTrust - 4);
+    m_budget = std::max(0, m_budget - 4000);
+  } else if (m_currentTimeWindowIndex == 3) {
+    m_cityStatus = "EVACUATE";
+    m_publicTrust = std::max(0, m_publicTrust - 6);
+    m_budget = std::max(0, m_budget - 6000);
+  }
+}
+
 void DemoDesktop::Cleanup() {
   if (m_desktop) {
     m_desktop->Cleanup();
@@ -131,17 +160,22 @@ void DemoDesktop::SetupDesktopIcons() {
   // Threat Center icon
   m_desktop->AddDesktopIcon(
       "Threat Center", m_threatIconTex, m_bgIconTex, [this]() {
-        m_desktop->OpenWindow("Threat Center", {100, 80, 750, 450},
-                              DrawThreatCenterContent, m_threatIconTex);
+        m_desktop->OpenWindow(
+            "Threat Center", {100, 80, 750, 450},
+            [this](Rectangle area) { DrawThreatCenterContent(area); },
+            m_threatIconTex);
         m_desktop->Notify("Threat Center",
-                          "Threat Monitoring System activated.");
+                          "Threat Monitoring System activated at " +
+                              GetCurrentTimeLabel() + ".");
       });
 
   // Comms icon
   m_desktop->AddDesktopIcon("Comms", m_commsIconTex, m_bgIconTex, [this]() {
-    m_desktop->OpenWindow("Comms", {100, 100, 850, 540}, DrawCommsContent,
-                          m_commsIconTex);
-    m_desktop->Notify("Comms & Media", "Comms Activated");
+    m_desktop->OpenWindow(
+        "Comms", {100, 100, 850, 540},
+        [this](Rectangle area) { DrawCommsContent(area); }, m_commsIconTex);
+    m_desktop->Notify("Comms & Media",
+                      "Comms activated at " + GetCurrentTimeLabel() + ".");
   });
 
   // Mitigation Hub icon
@@ -152,7 +186,8 @@ void DemoDesktop::SetupDesktopIcons() {
             [this](Rectangle area) { DrawMitigationHub(area); },
             m_mitigationIconTex);
         m_desktop->Notify("Mitigation Hub",
-                          "Don't let this disaster continue.");
+                          "Operational window active at " +
+                              GetCurrentTimeLabel() + ".");
       });
 
   // Decision Log icon
@@ -162,7 +197,9 @@ void DemoDesktop::SetupDesktopIcons() {
             "Decision Log", {100, 100, 500, 350},
             [this](Rectangle area) { DrawDecisionLog(area); },
             m_bookmarkIconTex);
-        m_desktop->Notify("Decision Log", "Decision Log activated.");
+        m_desktop->Notify("Decision Log",
+                          "Decision Log opened at " + GetCurrentTimeLabel() +
+                              ".");
       });
 
   // Notes icon
@@ -233,17 +270,26 @@ void DemoDesktop::SetupContextMenu() {
 void DemoDesktop::SetupSystemTray() {
   m_desktop->AddTrayItem(
       "clock",
-      [](Rectangle area) {
-        time_t now = time(nullptr);
-        struct tm *t = localtime(&now);
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%02d:%02d", t->tm_hour, t->tm_min);
+      [this](Rectangle area) {
+        std::string dateText = "07/17/2026";
+        Font font = GetFontDefault();
 
-        float textY = area.y + (area.height - 11) * 0.5f;
-        Fumbo::Graphic2D::DrawText(buf, {area.x + 2.0f, textY},
-                                   GetFontDefault(), 11, {200, 200, 230, 255});
+        Vector2 timeSize = MeasureTextEx(font, GetCurrentTimeLabel().c_str(), 10, 1.0f);
+        Vector2 dateSize = MeasureTextEx(font, dateText.c_str(), 8, 1.0f);
+
+        float totalHeight = timeSize.y + 2.0f + dateSize.y;
+        float startY = area.y + (area.height - totalHeight) * 0.5f;
+
+        Fumbo::Graphic2D::DrawText(GetCurrentTimeLabel(),
+                                   {area.x + (area.width - timeSize.x) * 0.5f,
+                                    startY},
+                                   font, 10, BLACK);
+        Fumbo::Graphic2D::DrawText(dateText,
+                                   {area.x + (area.width - dateSize.x) * 0.5f,
+                                    startY + timeSize.y + 2.0f},
+                                   font, 8, BLACK);
       },
-      nullptr, 45.0f);
+      nullptr, 58.0f);
 }
 
 // Window Content Drawers (static: reusable from anywhere)
@@ -361,6 +407,9 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   Fumbo::Graphic2D::DrawText("REGIONAL MONITORING MAP",
                              {leftX + 5.0f, leftY + 5.0f}, font, 13,
                              {0, 230, 118, 255});
+  Fumbo::Graphic2D::DrawText("CURRENT TIME: " + GetCurrentTimeLabel(),
+                             {leftX + 5.0f, leftY + 20.0f}, font, 10,
+                             {255, 215, 0, 255});
 
   // Draw simulated map box
   Rectangle mapBox = {leftX, leftY + 25.0f, leftW, leftH - 25.0f};
@@ -480,14 +529,16 @@ void DemoDesktop::DrawThreatCenterContent(Rectangle area) {
   Fumbo::Graphic2D::DrawText("LIVE MONITOR STATUS:", {textX, textY}, font, 11,
                              {0, 230, 118, 255});
   textY += 16.0f;
-  Fumbo::Graphic2D::DrawText("SEC-A: 3.8m | 42mm/h (OK)", {textX + 8.0f, textY},
-                             font, 10, {180, 235, 180, 255});
+  std::string monitorA = (m_currentTimeWindowIndex >= 2) ? "SEC-A: 4.6m | 74mm/h (WARN)" : "SEC-A: 3.8m | 42mm/h (OK)";
+  std::string monitorB = (m_currentTimeWindowIndex >= 1) ? "SEC-B: 11 tremors/h (WATCH)" : "SEC-B: 7 tremors/h (OK)";
+  std::string monitorC = (m_currentTimeWindowIndex >= 3) ? "SEC-C: 41 C | Hum 9% (CRITICAL)" : "SEC-C: 39 C | Hum 12% (WARN)";
+  Fumbo::Graphic2D::DrawText(monitorA, {textX + 8.0f, textY}, font, 10,
+                             {180, 235, 180, 255});
   textY += 14.0f;
-  Fumbo::Graphic2D::DrawText("SEC-B: 7 tremors/h   (OK)", {textX + 8.0f, textY},
-                             font, 10, {180, 235, 180, 255});
+  Fumbo::Graphic2D::DrawText(monitorB, {textX + 8.0f, textY}, font, 10,
+                             {180, 235, 180, 255});
   textY += 14.0f;
-  Fumbo::Graphic2D::DrawText("SEC-C: 39 C | Hum 12% (WARN)",
-                             {textX + 8.0f, textY}, font, 10,
+  Fumbo::Graphic2D::DrawText(monitorC, {textX + 8.0f, textY}, font, 10,
                              {255, 140, 140, 255});
 }
 
@@ -784,6 +835,7 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
   float padding = 12.0f;
   float gap = 10.0f;
   Font font = GetFontDefault();
+  std::string currentTime = GetCurrentTimeLabel();
 
   // Grid calculation split
   float leftW = (area.width - 3.0f * padding) * 0.48f;
@@ -844,8 +896,8 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
 
     // Timestamp
     y += isFeatured ? 20.0f : 15.0f;
-    Fumbo::Graphic2D::DrawText("RECEIVED: " + cards[index].timestamp, {x, y},
-                               font, 8, {140, 140, 160, 255});
+    Fumbo::Graphic2D::DrawText("RECEIVED: " + currentTime, {x, y}, font, 8,
+                               {140, 140, 160, 255});
 
     // Divider line
     y += isFeatured ? 15.0f : 12.0f;
@@ -960,7 +1012,7 @@ void DemoDesktop::DrawCommsContent(Rectangle area) {
 
     // Classification stamp
     my += 20.0f;
-    Fumbo::Graphic2D::DrawText("TIME: " + cards[s_selectedCommsCard].timestamp +
+    Fumbo::Graphic2D::DrawText("TIME: " + currentTime +
                                    "  |  STATUS: CLASSIFIED INTEL",
                                {mx, my}, font, 9, {140, 140, 160, 255});
 
@@ -1072,6 +1124,17 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
         "Resource intensive"},
        {"Deploy Medical Teams", "--", "++", "Rapid response ready",
         "Teams committed"}}};
+
+  Fumbo::Graphic2D::DrawText("SHIFT " + std::to_string(m_shiftNumber),
+                             {area.x + padding, area.y + padding + 2.0f}, font,
+                             10, {255, 215, 0, 255});
+  Fumbo::Graphic2D::DrawText("TIME: " + GetCurrentTimeLabel(),
+                             {area.x + padding + 90.0f, area.y + padding + 2.0f},
+                             font, 10, {0, 230, 118, 255});
+  std::string progressText = "WINDOW " + std::to_string(m_currentTimeWindowIndex + 1) + " / 4";
+  Fumbo::Graphic2D::DrawText(progressText,
+                             {area.x + padding + 210.0f, area.y + padding + 2.0f},
+                             font, 10, {140, 180, 255, 255});
 
   // ========== 1. RESOURCE OVERVIEW BAR ==========
   float barH = 34.0f;
@@ -1357,16 +1420,21 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                       btnH};
   bool endHovered = CheckCollisionPointRec(mouse, endBtn);
 
-  Color endBg = (queueCount > 0) ? (endHovered ? Color{200, 40, 40, 255}
-                                               : Color{160, 25, 25, 255})
-                                 : Color{50, 50, 60, 255};
+  bool canAdvance = queueCount > 0;
+  std::string buttonLabel = (m_currentTimeWindowIndex < 3)
+                                ? "EXECUTE PLAN & ADVANCE TIME"
+                                : "COMPLETE SHIFT";
+
+  Color endBg = (canAdvance)
+                    ? (endHovered ? Color{200, 40, 40, 255} : Color{160, 25, 25, 255})
+                    : Color{50, 50, 60, 255};
   Fumbo::Graphic2D::DrawRectangleRounded(endBtn, 0.1f, 4, endBg);
   Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(
       endBtn, 0.1f, 4, 1.2f,
-      queueCount > 0 ? Color{255, 80, 80, 255} : Color{70, 70, 85, 255});
+      canAdvance ? Color{255, 80, 80, 255} : Color{70, 70, 85, 255});
 
-  Color btnTextColor = queueCount > 0 ? WHITE : Color{100, 100, 110, 255};
-  Fumbo::Graphic2D::DrawText("LOCK DECISIONS & END SHIFT",
+  Color btnTextColor = canAdvance ? WHITE : Color{100, 100, 110, 255};
+  Fumbo::Graphic2D::DrawText(buttonLabel,
                              {endBtn.x + 12.0f, endBtn.y + 10.0f}, font, 10,
                              btnTextColor);
 
@@ -1378,7 +1446,97 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
                                font, 10, {255, 215, 0, 255});
   }
 
-  if (s_showEndShiftConfirm && queueCount > 0) {
+  if (m_shiftSummaryVisible) {
+    Fumbo::Graphic2D::DrawRectangleRec(area, {8, 10, 16, 230});
+    Rectangle summaryRect = {area.x + 24.0f, area.y + 24.0f, area.width - 48.0f,
+                             area.height - 48.0f};
+    Fumbo::Graphic2D::DrawRectangleRounded(summaryRect, 0.03f, 4,
+                                           {20, 24, 33, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(summaryRect, 0.03f, 4, 1.2f,
+                                                  {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText("SHIFT SUMMARY",
+                               {summaryRect.x + 16.0f, summaryRect.y + 16.0f}, font,
+                               13, {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText("Operational performance snapshot",
+                               {summaryRect.x + 16.0f, summaryRect.y + 38.0f}, font,
+                               10, {180, 180, 210, 255});
+
+    std::string stats[][2] = {{"Lives Saved", "142"}, {"Casualties", "8"},
+                              {"Infrastructure Damage", "24%"},
+                              {"Budget Remaining", "$27,500"},
+                              {"Public Trust Change", "+6%"},
+                              {"Overall Rating", "4.2/5"}};
+    float statY = summaryRect.y + 70.0f;
+    for (int i = 0; i < 6; i++) {
+      Fumbo::Graphic2D::DrawText(stats[i][0], {summaryRect.x + 16.0f, statY + i * 22.0f}, font, 10,
+                                 {220, 220, 235, 255});
+      Fumbo::Graphic2D::DrawText(stats[i][1], {summaryRect.x + summaryRect.width - 120.0f, statY + i * 22.0f}, font, 10,
+                                 {0, 230, 118, 255});
+    }
+
+    Fumbo::Graphic2D::DrawText(
+        "A family made it home tonight, but eight others were lost to the storm's delay.",
+        {summaryRect.x + 16.0f, summaryRect.y + summaryRect.height - 86.0f}, font,
+        10, {255, 180, 120, 255});
+    Fumbo::Graphic2D::DrawText(
+        "The city will remember who acted fast, and who hesitated too long.",
+        {summaryRect.x + 16.0f, summaryRect.y + summaryRect.height - 66.0f}, font,
+        10, {255, 120, 120, 255});
+
+    Rectangle closeBtn = {summaryRect.x + summaryRect.width - 104.0f,
+                          summaryRect.y + summaryRect.height - 40.0f, 88.0f,
+                          24.0f};
+    bool closeHovered = CheckCollisionPointRec(mouse, closeBtn);
+    Fumbo::Graphic2D::DrawRectangleRounded(closeBtn, 0.1f, 4, closeHovered ? Color{80, 80, 95, 255} : Color{50, 55, 70, 255});
+    Fumbo::Graphic2D::DrawText("CONTINUE", {closeBtn.x + 20.0f, closeBtn.y + 6.0f}, font, 9, WHITE);
+
+    if (closeHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      m_shiftSummaryVisible = false;
+      m_shiftBriefingVisible = true;
+      m_shiftNumber++;
+      m_currentTimeWindowIndex = 0;
+      m_currentTimeLabel = "08:00";
+      m_cityStatus = "ALERT";
+      for (int t = 0; t < 3; t++)
+        for (int a = 0; a < 5; a++)
+          s_queuedActions[t][a] = false;
+    }
+  } else if (m_shiftBriefingVisible) {
+    Fumbo::Graphic2D::DrawRectangleRec(area, {8, 10, 16, 230});
+    Rectangle briefingRect = {area.x + 24.0f, area.y + 24.0f, area.width - 48.0f,
+                              area.height - 48.0f};
+    Fumbo::Graphic2D::DrawRectangleRounded(briefingRect, 0.03f, 4,
+                                           {20, 24, 33, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(briefingRect, 0.03f, 4, 1.2f,
+                                                  {0, 230, 118, 255});
+    Fumbo::Graphic2D::DrawText("OPERATIONAL BRIEFING",
+                               {briefingRect.x + 16.0f, briefingRect.y + 16.0f}, font,
+                               13, {0, 230, 118, 255});
+    Fumbo::Graphic2D::DrawText("Next shift readiness update",
+                               {briefingRect.x + 16.0f, briefingRect.y + 38.0f}, font,
+                               10, {180, 180, 210, 255});
+    Fumbo::Graphic2D::DrawText("- Recheck sensor calibration before dispatch.",
+                               {briefingRect.x + 16.0f, briefingRect.y + 70.0f}, font,
+                               10, {220, 220, 235, 255});
+    Fumbo::Graphic2D::DrawText("- Prepare shelter and communications routes.",
+                               {briefingRect.x + 16.0f, briefingRect.y + 92.0f}, font,
+                               10, {220, 220, 235, 255});
+    Fumbo::Graphic2D::DrawText("- Maintain public trust with clear updates.",
+                               {briefingRect.x + 16.0f, briefingRect.y + 114.0f}, font,
+                               10, {220, 220, 235, 255});
+
+    Rectangle continueBtn = {briefingRect.x + briefingRect.width - 104.0f,
+                             briefingRect.y + briefingRect.height - 40.0f, 88.0f,
+                             24.0f};
+    bool continueHovered = CheckCollisionPointRec(mouse, continueBtn);
+    Fumbo::Graphic2D::DrawRectangleRounded(continueBtn, 0.1f, 4, continueHovered ? Color{80, 120, 90, 255} : Color{50, 90, 60, 255});
+    Fumbo::Graphic2D::DrawText("RETURN", {continueBtn.x + 24.0f, continueBtn.y + 6.0f}, font, 9, WHITE);
+
+    if (continueHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      m_shiftBriefingVisible = false;
+      m_desktop->Notify("Operations", "Shift " + std::to_string(m_shiftNumber) + " briefing complete.");
+    }
+  } else if (s_showEndShiftConfirm && canAdvance) {
     Fumbo::Graphic2D::DrawRectangleRec(area, {12, 14, 21, 220});
     Rectangle modalRect = {area.x + 70.0f, area.y + 70.0f, area.width - 140.0f,
                            area.height - 140.0f};
@@ -1387,16 +1545,16 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(modalRect, 0.04f, 4, 1.2f,
                                                   {255, 80, 80, 255});
 
-    Fumbo::Graphic2D::DrawText("END SHIFT CONFIRMATION",
+    std::string confirmTitle = (m_currentTimeWindowIndex < 3) ? "ADVANCE TIME WINDOW" : "COMPLETE SHIFT";
+    std::string confirmText = (m_currentTimeWindowIndex < 3)
+                                  ? "Execute the queued actions and advance to the next operational window?"
+                                  : "Complete the shift and review the summary?";
+    Fumbo::Graphic2D::DrawText(confirmTitle,
                                {modalRect.x + 16.0f, modalRect.y + 16.0f}, font,
                                11, {255, 215, 0, 255});
-    Fumbo::Graphic2D::DrawText(
-        "Lock the current decisions and submit them to the shift audit trail?",
-        {modalRect.x + 16.0f, modalRect.y + 48.0f}, font, 10,
-        {220, 220, 235, 255});
-    Fumbo::Graphic2D::DrawText("This action cannot be edited once confirmed.",
-                               {modalRect.x + 16.0f, modalRect.y + 68.0f}, font,
-                               9, {150, 150, 170, 255});
+    Fumbo::Graphic2D::DrawText(confirmText,
+                               {modalRect.x + 16.0f, modalRect.y + 48.0f}, font,
+                               10, {220, 220, 235, 255});
 
     Rectangle confirmBtn = {modalRect.x + 16.0f,
                             modalRect.y + modalRect.height - 44.0f, 92.0f,
@@ -1441,12 +1599,18 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
       for (int t = 0; t < 3; t++)
         for (int a = 0; a < 5; a++)
           s_queuedActions[t][a] = false;
+
+      if (m_currentTimeWindowIndex < 3) {
+        AdvanceTimeWindow();
+        m_desktop->Notify("Operations", "Advance complete. Current time is " + GetCurrentTimeLabel() + ".");
+      } else {
+        m_shiftSummaryVisible = true;
+      }
       s_showEndShiftConfirm = false;
     } else if (cancelHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
       s_showEndShiftConfirm = false;
     }
-  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
-             queueCount > 0) {
+  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && canAdvance) {
     s_showEndShiftConfirm = true;
   }
 }
