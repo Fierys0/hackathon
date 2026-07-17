@@ -57,6 +57,15 @@ static std::string ExtractTextResponse(const std::string& str);
 // Simple JSON parser scanning for "headline" and "body"
 static AIReportResult ParseResponse(const std::string& rawResponse) {
     AIReportResult result;
+
+    // Check for quota exceeded error from Google API
+    if (rawResponse.find("RESOURCE_EXHAUSTED") != std::string::npos ||
+        rawResponse.find("429") != std::string::npos) {
+        result.success = false;
+        result.quotaExceeded = true;
+        return result;
+    }
+
     std::string textContent = ExtractTextResponse(rawResponse);
     if (textContent.empty()) {
         result.success = false;
@@ -354,16 +363,122 @@ std::future<AIChatResult> AIService::RequestChatResponseAsync(
         curl_slist_free_all(headers);
 
         if (res == CURLE_OK && !response.data.empty()) {
-            std::string textResponse = ExtractTextResponse(response.data);
-            if (!textResponse.empty()) {
-                result.message = textResponse;
-                result.success = true;
-            } else {
-                std::cerr << "[AIService ERROR] Failed to extract text from chat response. Raw response:\n" << response.data << "\n";
+            // Check for quota exceeded (HTTP 429 / RESOURCE_EXHAUSTED from Google API)
+            if (response.data.find("RESOURCE_EXHAUSTED") != std::string::npos ||
+                response.data.find("429") != std::string::npos) {
+                std::cerr << "[AIService] Chat quota exceeded.\n";
                 result.success = false;
+                result.quotaExceeded = true;
+            } else {
+                std::string textResponse = ExtractTextResponse(response.data);
+                if (!textResponse.empty()) {
+                    result.message = textResponse;
+                    result.success = true;
+                } else {
+                    std::cerr << "[AIService ERROR] Failed to extract text from chat response. Raw response:\n" << response.data << "\n";
+                    result.success = false;
+                }
             }
         } else {
             std::cerr << "[AIService ERROR] curl_easy_perform failed or empty response in chat. Code: " << res << ", Error: " << curl_easy_strerror(res) << "\n";
+            result.success = false;
+        }
+        return result;
+    });
+#endif
+}
+
+std::future<AIReportResult> AIService::RequestAfterActionReportAsync(
+    int shiftNum,
+    int peopleSaved,
+    int casualties,
+    int budgetSpent,
+    const std::string& actionsTakenList
+) {
+#ifndef HAS_CURL
+    return std::async(std::launch::async, [shiftNum]() {
+        AIReportResult res;
+        res.headline = "Shift " + std::to_string(shiftNum) + " Complete";
+        res.body = "Offline mode active. No detailed After-Action Report available.";
+        res.success = false;
+        return res;
+    });
+#else
+    return std::async(std::launch::async, [shiftNum, peopleSaved, casualties, budgetSpent, actionsTakenList]() {
+        AIReportResult result;
+        std::string key = LoadAPIKey();
+        if (key.empty()) {
+            result.headline = "Key Missing";
+            result.body = "[AIService] Cannot generate report: api_key.txt not found.";
+            result.success = false;
+            return result;
+        }
+
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            result.success = false;
+            return result;
+        }
+
+        std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent";
+
+        std::ostringstream promptStream;
+        promptStream << "You are generating an After-Action Report for a disaster management simulation game.\n"
+                     << "Shift Number: " << shiftNum << "\n"
+                     << "People Saved: " << peopleSaved << "\n"
+                     << "Casualties: " << casualties << "\n"
+                     << "Budget Spent: $" << budgetSpent << "\n"
+                     << "Actions Taken by Player: " << (actionsTakenList.empty() ? "None" : actionsTakenList) << "\n\n"
+                     << "Write a concise cause-and-effect analysis explaining why the player achieved this outcome based on their decisions.\n"
+                     << "For each important action taken (or not taken), generate a short analysis (1-2 sentences max per action).\n"
+                     << "Conclude the report with a short 'Overall Assessment' summarizing the effectiveness of the response.\n"
+                     << "Do NOT expose internal formulas or calculations.\n"
+                     << "Respond ONLY with a JSON object containing:\n"
+                     << "{\n"
+                     << "  \"headline\": \"(max 5 words)\",\n"
+                     << "  \"body\": \"(the full formatted text of the report with newlines)\"\n"
+                     << "}\n"
+                     << "Do not wrap in markdown ```json blocks. Print raw JSON.";
+
+        std::string prompt = promptStream.str();
+
+        std::string escapedPrompt;
+        for (char c : prompt) {
+            if (c == '\"') escapedPrompt += "\\\"";
+            else if (c == '\\') escapedPrompt += "\\\\";
+            else if (c == '\n') escapedPrompt += "\\n";
+            else if (c == '\r') escapedPrompt += "\\r";
+            else if (c == '\t') escapedPrompt += "\\t";
+            else escapedPrompt += c;
+        }
+
+        std::string jsonPayload = "{\"contents\":[{\"parts\":[{\"text\":\"" + escapedPrompt + "\"}]}]}";
+
+        CurlResponse response;
+        struct curl_slist* headers = nullptr;
+        headers = curl_slist_append(headers, "Content-Type: application/json");
+        std::string apiKeyHeader = "X-goog-api-key: " + key;
+        headers = curl_slist_append(headers, apiKeyHeader.c_str());
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, jsonPayload.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 15L);
+
+        CURLcode res = curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+        curl_slist_free_all(headers);
+
+        if (res == CURLE_OK && !response.data.empty()) {
+            result = ParseResponse(response.data);
+            if (!result.success) {
+                std::cerr << "[AIService ERROR] Failed to parse AAR response.\n";
+            }
+        } else {
+            std::cerr << "[AIService ERROR] curl_easy_perform failed for AAR.\n";
             result.success = false;
         }
         return result;

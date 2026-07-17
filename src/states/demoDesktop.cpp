@@ -193,6 +193,27 @@ void DemoDesktop::Update() {
     }
   }
 
+  if (m_aarPending) {
+    auto status = m_aarFuture.wait_for(std::chrono::seconds(0));
+    if (status == std::future_status::ready) {
+      m_aarPending = false;
+      Game::AIReportResult res = m_aarFuture.get();
+      if (res.success) {
+          m_aarHeadline = res.headline;
+          m_aarBody = res.body;
+          if (m_aarHeadline.empty()) {
+             m_aarHeadline = "Report Ready";
+          }
+      } else if (res.quotaExceeded) {
+          m_aarHeadline = "Quota Exceeded";
+          m_aarBody = "AI API quota has been exceeded. No After-Action Report is available for this shift. Please check your Google AI Studio usage limits and try again later.";
+      } else {
+          m_aarHeadline = "AAR Unavailable";
+          m_aarBody = "The AI is currently offline or unreachable. Cannot generate detailed cause-and-effect analysis for this shift.";
+      }
+    }
+  }
+
   if (m_radioPending) {
     auto status = m_radioFuture.wait_for(std::chrono::seconds(0));
     if (status == std::future_status::ready) {
@@ -207,6 +228,12 @@ void DemoDesktop::Update() {
 
       if (res.success) {
         m_radioChatHistory.push_back({contact, res.message});
+      } else if (res.quotaExceeded) {
+        // Quota exceeded: show a clear system notice so the player knows why
+        m_radioChatHistory.push_back(
+            {"SYSTEM",
+             "[!] AI quota exceeded. Field radio AI responses are temporarily "
+             "unavailable. Please check your API usage limits."});
       } else {
         // Fallback offline responses if API key or connection failed
         std::string fallback =
@@ -362,24 +389,41 @@ void DemoDesktop::DrawDirty() {
           12, {0, 100, 0, 255});
     }
 
-    std::string line1Text = "Operations completed successfully for the day.";
-    std::string line2Text = "The city is safe. Good job, officer.";
-    if (gsFinal.casualties > 0) {
-      line1Text =
-          std::to_string(gsFinal.peopleSaved) + " lives were saved, but " +
-          std::to_string(gsFinal.casualties) + " citizens were lost today.";
-      line2Text =
-          "The city will remember who acted fast, and who hesitated too long.";
-    }
+    // After-Action Report Panel
+    float aarY = statY + 6 * 28.0f + 10.0f;
+    Rectangle aarRect = {summaryRect.x + 20.0f, aarY, summaryRect.width - 40.0f, 180.0f};
+    Fumbo::Graphic2D::DrawRectangleRec(aarRect, {255, 255, 255, 255});
+    Fumbo::Graphic2D::DrawRectangleLinesEx(aarRect, 1.0f, {128, 128, 128, 255});
 
-    Fumbo::Graphic2D::DrawText(
-        line1Text,
-        {summaryRect.x + 30.0f, summaryRect.y + summaryRect.height - 110.0f},
-        font, 10, {100, 0, 0, 255});
-    Fumbo::Graphic2D::DrawText(
-        line2Text,
-        {summaryRect.x + 30.0f, summaryRect.y + summaryRect.height - 90.0f},
-        font, 10, {200, 0, 0, 255});
+    Fumbo::Graphic2D::DrawText("After-Action Report", {aarRect.x + 5.0f, aarRect.y + 5.0f}, font, 11, {0, 0, 128, 255});
+    
+    // Draw AAR Headline
+    Fumbo::Graphic2D::DrawText(m_aarHeadline, {aarRect.x + 5.0f, aarRect.y + 25.0f}, font, 12, {0, 100, 0, 255});
+
+    // Draw AAR Body (wrap text)
+    std::string wrappedText = "";
+    int currentLineLength = 0;
+    std::string currentWord = "";
+    for (char c : m_aarBody) {
+        if (c == ' ' || c == '\n') {
+            if (currentLineLength + currentWord.length() > 80) {
+                wrappedText += "\n";
+                currentLineLength = 0;
+            }
+            wrappedText += currentWord + c;
+            if (c == '\n') currentLineLength = 0;
+            else currentLineLength += currentWord.length() + 1;
+            currentWord = "";
+        } else {
+            currentWord += c;
+        }
+    }
+    if (!currentWord.empty()) {
+        if (currentLineLength + currentWord.length() > 80) wrappedText += "\n";
+        wrappedText += currentWord;
+    }
+    
+    Fumbo::Graphic2D::DrawText(wrappedText, {aarRect.x + 5.0f, aarRect.y + 45.0f}, font, 10, BLACK);
 
     // Continue Button (3D raised)
     Rectangle closeBtn = {summaryRect.x + summaryRect.width - 140.0f,
@@ -817,21 +861,73 @@ void DemoDesktop::DrawSettingsContent(Rectangle area) {
   float x = area.x + 15.0f;
   Font font = OS::GlobalFont;
 
+  Vector2 scale = Fumbo::Utils::GetUIScale();
+  Vector2 offset = Fumbo::Utils::GetUIOffset();
+  Vector2 rawMouse = GetMousePosition();
+  Vector2 mouse = {(rawMouse.x - offset.x) / scale.x,
+                   (rawMouse.y - offset.y) / scale.y};
+
   Fumbo::Graphic2D::DrawText("System Settings", {x, y}, font, 15, WHITE);
   y += 30.0f;
 
-  const char *settings[] = {"Display", "Sound", "Network", "Appearance",
-                            "Privacy"};
-  for (int i = 0; i < 5; i++) {
-    Rectangle itemRect = {x, y, area.width - 30.0f, 30.0f};
-    Color bg = (i % 2 == 0) ? Color{40, 40, 60, 200} : Color{35, 35, 52, 200};
-    Fumbo::Graphic2D::DrawRectangleRounded(itemRect, 0.1f, 4, bg);
-    Fumbo::Graphic2D::DrawText(settings[i], {x + 12.0f, y + 7.0f}, font, 12,
-                               {200, 200, 230, 255});
-    Fumbo::Graphic2D::DrawText(">", {x + area.width - 50.0f, y + 7.0f}, font,
-                               12, {120, 120, 160, 255});
-    y += 34.0f;
+  // 1. Display Setting (Fullscreen toggle)
+  Rectangle itemRect = {x, y, area.width - 30.0f, 30.0f};
+  Fumbo::Graphic2D::DrawRectangleRounded(itemRect, 0.1f, 4, {40, 40, 60, 200});
+  Fumbo::Graphic2D::DrawText("Display", {x + 12.0f, y + 7.0f}, font, 12, {200, 200, 230, 255});
+
+  bool isFullscreen = IsWindowFullscreen();
+  
+  // Windowed Button
+  Rectangle btnWindowedRect = {x + area.width - 240.0f, y + 4.0f, 90.0f, 22.0f};
+  bool btnWindowedHover = CheckCollisionPointRec(mouse, btnWindowedRect);
+  Color btnWindowedColor = !isFullscreen ? Color{60, 100, 160, 255} : (btnWindowedHover ? Color{60, 80, 100, 255} : Color{50, 60, 80, 255});
+  Fumbo::Graphic2D::DrawRectangleRounded(btnWindowedRect, 0.2f, 4, btnWindowedColor);
+  Fumbo::Graphic2D::DrawText("Windowed", {btnWindowedRect.x + 15.0f, btnWindowedRect.y + 4.0f}, font, 10, WHITE);
+
+  if (btnWindowedHover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && isFullscreen) {
+      ToggleFullscreen();
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
   }
+
+  // Fullscreen Button
+  Rectangle btnFullscreenRect = {x + area.width - 140.0f, y + 4.0f, 90.0f, 22.0f};
+  bool btnFullscreenHover = CheckCollisionPointRec(mouse, btnFullscreenRect);
+  Color btnFullscreenColor = isFullscreen ? Color{60, 100, 160, 255} : (btnFullscreenHover ? Color{60, 80, 100, 255} : Color{50, 60, 80, 255});
+  Fumbo::Graphic2D::DrawRectangleRounded(btnFullscreenRect, 0.2f, 4, btnFullscreenColor);
+  Fumbo::Graphic2D::DrawText("Fullscreen", {btnFullscreenRect.x + 10.0f, btnFullscreenRect.y + 4.0f}, font, 10, WHITE);
+
+  if (btnFullscreenHover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !isFullscreen) {
+      ToggleFullscreen();
+      Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+  }
+
+  y += 40.0f;
+
+  // 2. Sound Setting (Volume slider)
+  itemRect = {x, y, area.width - 30.0f, 40.0f};
+  Fumbo::Graphic2D::DrawRectangleRounded(itemRect, 0.1f, 4, {35, 35, 52, 200});
+  Fumbo::Graphic2D::DrawText("Master Volume", {x + 12.0f, y + 12.0f}, font, 12, {200, 200, 230, 255});
+
+  float currentVolume = Fumbo::Engine::Instance().GetAudioManager().GetMasterVolume();
+  Rectangle sliderTrack = {x + 160.0f, y + 18.0f, area.width - 200.0f, 4.0f};
+  Fumbo::Graphic2D::DrawRectangleRec(sliderTrack, {60, 60, 80, 255});
+
+  Rectangle sliderFill = {sliderTrack.x, sliderTrack.y, sliderTrack.width * currentVolume, sliderTrack.height};
+  Fumbo::Graphic2D::DrawRectangleRec(sliderFill, {100, 150, 255, 255});
+
+  Rectangle handle = {sliderTrack.x + sliderTrack.width * currentVolume - 5.0f, y + 10.0f, 10.0f, 20.0f};
+  
+  // Create a wider hit area for dragging
+  Rectangle sliderHitArea = {sliderTrack.x - 10.0f, y + 5.0f, sliderTrack.width + 20.0f, 30.0f};
+  if (CheckCollisionPointRec(mouse, sliderHitArea) && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+      float newVal = (mouse.x - sliderTrack.x) / sliderTrack.width;
+      newVal = std::clamp(newVal, 0.0f, 1.0f);
+      Fumbo::Engine::Instance().GetAudioManager().SetMasterVolume(newVal);
+  }
+
+  bool handleHover = CheckCollisionPointRec(mouse, handle);
+  Color handleColor = (handleHover || (CheckCollisionPointRec(mouse, sliderHitArea) && IsMouseButtonDown(MOUSE_BUTTON_LEFT))) ? WHITE : LIGHTGRAY;
+  Fumbo::Graphic2D::DrawRectangleRec(handle, handleColor);
 }
 
 void DemoDesktop::DrawFileManagerContent(Rectangle area) {
@@ -2421,6 +2517,19 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
               std::clamp(gsFinal.publicTrust / 20.0f, 0.0f, 5.0f);
           gsFinal.decisionLog.push_back(summary);
           m_shiftSummaryVisible = true;
+
+          // Request AAR
+          std::string actionsList;
+          for (const auto& a : summary.actionsTaken) {
+              if (!actionsList.empty()) actionsList += ", ";
+              actionsList += a;
+          }
+          m_aarHeadline = "Generating Report...";
+          m_aarBody = "The AI is currently analyzing your performance and generating an After-Action Report. Please wait...";
+          m_aarPending = true;
+          m_aarFuture = Game::AIService::RequestAfterActionReportAsync(
+              summary.shiftNumber, summary.peopleSaved, summary.casualties, summary.budgetSpent, actionsList
+          );
         } else {
           // Shift continues: keep UI in next window. Keep legacy notifications.
           if (m_currentTimeWindowIndex >= 2) {

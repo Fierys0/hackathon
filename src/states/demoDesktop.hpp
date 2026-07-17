@@ -91,4 +91,10 @@ private:
 
   // Backend game manager to expose live threat center data to the UI
   Game::GameManager m_gameManager;
+
+  // After-Action Report (AAR)
+  bool m_aarPending = false;
+  std::string m_aarHeadline;
+  std::string m_aarBody;
+  std::future<Game::AIReportResult> m_aarFuture;
 };

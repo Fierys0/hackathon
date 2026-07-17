@@ -9,11 +9,13 @@ struct AIReportResult {
     std::string headline;
     std::string body;
     bool success = false;
+    bool quotaExceeded = false;
 };
 
 struct AIChatResult {
     std::string message;
     bool success = false;
+    bool quotaExceeded = false;
 };
 
 class AIService {
@@ -45,6 +47,15 @@ public:
         const std::string& characterName,
         const std::string& userMessage,
         const std::string& threatStatus
+    );
+
+    // Trigger an asynchronous after-action report response.
+    static std::future<AIReportResult> RequestAfterActionReportAsync(
+        int shiftNum,
+        int peopleSaved,
+        int casualties,
+        int budgetSpent,
+        const std::string& actionsTakenList
     );
 };
 
