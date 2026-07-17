@@ -1,7 +1,6 @@
 #include "core/globals.hpp"
 #include "fumbo.hpp"
-
-#include "states/demoDesktop.hpp"
+#include "states/titlescreen.hpp"
 #include <memory>
 
 int main() {
@@ -10,7 +9,7 @@ int main() {
 
   OS::LoadGlobalAssets();
 
-  Fumbo::Engine::Instance().Run(std::make_shared<DemoDesktop>());
+  Fumbo::Engine::Instance().Run(std::make_shared<TitleScreen>());
 
   OS::UnloadGlobalAssets();
 
