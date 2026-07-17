@@ -3,6 +3,8 @@
 #include "../core/globals.hpp"
 #include "fumbo.hpp"
 #include <memory>
+#include <string>
+#include <algorithm>
 
 void TitleScreen::Init() {
   // Preload Assets
@@ -45,6 +47,7 @@ void TitleScreen::Update() {
 
   if (m_btnsettings.IsPressed()) {
     Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+    m_showSettings = !m_showSettings;
   }
 
   if (m_btnexit.IsPressed()) {
@@ -94,4 +97,152 @@ void TitleScreen::DrawDirty() {
   DrawWin95ButtonBorder({540, 455, 200, 40}, false); // Disabled Load button is never pressed
   DrawWin95ButtonBorder({540, 510, 200, 40}, m_btnsettings.IsHover() && IsMouseButtonDown(MOUSE_LEFT_BUTTON));
   DrawWin95ButtonBorder({540, 565, 200, 40}, m_btnexit.IsHover() && IsMouseButtonDown(MOUSE_LEFT_BUTTON));
+
+  if (m_showSettings) {
+    DrawSettingsModal();
+  }
+}
+
+void TitleScreen::DrawSettingsModal() {
+  const float PANEL_W = 360.0f;
+  const float PANEL_H = 200.0f;
+  const float PANEL_X = (1280.0f - PANEL_W) * 0.5f;
+  const float PANEL_Y = (720.0f - PANEL_H) * 0.5f;
+
+  // ----- scaled mouse -----
+  Vector2 scale  = Fumbo::Utils::GetUIScale();
+  Vector2 offset = Fumbo::Utils::GetUIOffset();
+  Vector2 rawMouse = GetMousePosition();
+  Vector2 mouse = { (rawMouse.x - offset.x) / scale.x,
+                    (rawMouse.y - offset.y) / scale.y };
+
+  // Semi-transparent dim overlay
+  Fumbo::Graphic2D::DrawRectangleRec({0, 0, 1280, 720}, {0, 0, 0, 120});
+
+  // Win95-style panel background (grey)
+  Fumbo::Graphic2D::DrawRectangleRec({PANEL_X, PANEL_Y, PANEL_W, PANEL_H}, {192, 192, 192, 255});
+
+  // Outer 3D border (raised)
+  // top/left bright
+  Fumbo::Graphic2D::DrawLineEx({PANEL_X, PANEL_Y}, {PANEL_X + PANEL_W, PANEL_Y}, 2.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({PANEL_X, PANEL_Y}, {PANEL_X, PANEL_Y + PANEL_H}, 2.0f, WHITE);
+  // bottom/right dark
+  Fumbo::Graphic2D::DrawLineEx({PANEL_X + PANEL_W, PANEL_Y}, {PANEL_X + PANEL_W, PANEL_Y + PANEL_H}, 2.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawLineEx({PANEL_X, PANEL_Y + PANEL_H}, {PANEL_X + PANEL_W, PANEL_Y + PANEL_H}, 2.0f, {64,64,64,255});
+
+  // Title bar
+  Rectangle titleBar = {PANEL_X, PANEL_Y, PANEL_W, 24.0f};
+  Fumbo::Graphic2D::DrawRectangleRec(titleBar, {0, 0, 128, 255});
+  Fumbo::Graphic2D::DrawText("Settings", {PANEL_X + 8.0f, PANEL_Y + 5.0f}, OS::GlobalFont, 12, WHITE);
+
+  // Close button [X]
+  Rectangle closeRect = {PANEL_X + PANEL_W - 22.0f, PANEL_Y + 2.0f, 20.0f, 20.0f};
+  bool closeHover = CheckCollisionPointRec(mouse, closeRect);
+  Fumbo::Graphic2D::DrawRectangleRec(closeRect, closeHover ? Color{180,180,180,255} : Color{192,192,192,255});
+  // 3D border for close button
+  Fumbo::Graphic2D::DrawLineEx({closeRect.x, closeRect.y}, {closeRect.x + closeRect.width, closeRect.y}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({closeRect.x, closeRect.y}, {closeRect.x, closeRect.y + closeRect.height}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({closeRect.x + closeRect.width, closeRect.y}, {closeRect.x + closeRect.width, closeRect.y + closeRect.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawLineEx({closeRect.x, closeRect.y + closeRect.height}, {closeRect.x + closeRect.width, closeRect.y + closeRect.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawText("x", {closeRect.x + 5.0f, closeRect.y + 4.0f}, OS::GlobalFont, 10, BLACK);
+
+  if (closeHover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    m_showSettings = false;
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+    return;
+  }
+
+  float contentY = PANEL_Y + 34.0f;
+  float contentX = PANEL_X + 16.0f;
+
+  // ----- Display row -----
+  Fumbo::Graphic2D::DrawText("Display:", {contentX, contentY + 4.0f}, OS::GlobalFont, 11, BLACK);
+
+  bool isFullscreen = IsWindowFullscreen();
+
+  // Windowed button
+  Rectangle btnWindowed = {contentX + 90.0f, contentY, 100.0f, 22.0f};
+  bool btnWHover = CheckCollisionPointRec(mouse, btnWindowed);
+  Color btnWColor = !isFullscreen ? Color{0, 0, 128, 255} : (btnWHover ? Color{130,130,180,255} : Color{192,192,192,255});
+  Fumbo::Graphic2D::DrawRectangleRec(btnWindowed, btnWColor);
+  Fumbo::Graphic2D::DrawLineEx({btnWindowed.x, btnWindowed.y}, {btnWindowed.x + btnWindowed.width, btnWindowed.y}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({btnWindowed.x, btnWindowed.y}, {btnWindowed.x, btnWindowed.y + btnWindowed.height}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({btnWindowed.x + btnWindowed.width, btnWindowed.y}, {btnWindowed.x + btnWindowed.width, btnWindowed.y + btnWindowed.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawLineEx({btnWindowed.x, btnWindowed.y + btnWindowed.height}, {btnWindowed.x + btnWindowed.width, btnWindowed.y + btnWindowed.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawText("Windowed", {btnWindowed.x + 12.0f, btnWindowed.y + 5.0f}, OS::GlobalFont, 10, !isFullscreen ? WHITE : BLACK);
+  if (btnWHover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && isFullscreen) {
+    ToggleFullscreen();
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+  }
+
+  // Fullscreen button
+  Rectangle btnFull = {contentX + 200.0f, contentY, 100.0f, 22.0f};
+  bool btnFHover = CheckCollisionPointRec(mouse, btnFull);
+  Color btnFColor = isFullscreen ? Color{0, 0, 128, 255} : (btnFHover ? Color{130,130,180,255} : Color{192,192,192,255});
+  Fumbo::Graphic2D::DrawRectangleRec(btnFull, btnFColor);
+  Fumbo::Graphic2D::DrawLineEx({btnFull.x, btnFull.y}, {btnFull.x + btnFull.width, btnFull.y}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({btnFull.x, btnFull.y}, {btnFull.x, btnFull.y + btnFull.height}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({btnFull.x + btnFull.width, btnFull.y}, {btnFull.x + btnFull.width, btnFull.y + btnFull.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawLineEx({btnFull.x, btnFull.y + btnFull.height}, {btnFull.x + btnFull.width, btnFull.y + btnFull.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawText("Fullscreen", {btnFull.x + 10.0f, btnFull.y + 5.0f}, OS::GlobalFont, 10, isFullscreen ? WHITE : BLACK);
+  if (btnFHover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && !isFullscreen) {
+    ToggleFullscreen();
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+  }
+
+  contentY += 40.0f;
+
+  // ----- Volume row -----
+  Fumbo::Graphic2D::DrawText("Volume:", {contentX, contentY + 8.0f}, OS::GlobalFont, 11, BLACK);
+
+  float currentVolume = Fumbo::Engine::Instance().GetAudioManager().GetMasterVolume();
+  float sliderX = contentX + 90.0f;
+  float sliderW = PANEL_W - 170.0f;
+  Rectangle sliderTrack = {sliderX, contentY + 14.0f, sliderW, 4.0f};
+
+  // Sunken track border
+  Fumbo::Graphic2D::DrawLineEx({sliderTrack.x, sliderTrack.y}, {sliderTrack.x + sliderTrack.width, sliderTrack.y}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawLineEx({sliderTrack.x, sliderTrack.y}, {sliderTrack.x, sliderTrack.y + sliderTrack.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawRectangleRec(sliderTrack, {128, 128, 128, 255});
+  Rectangle sliderFill = {sliderTrack.x, sliderTrack.y, sliderTrack.width * currentVolume, sliderTrack.height};
+  Fumbo::Graphic2D::DrawRectangleRec(sliderFill, {0, 0, 128, 255});
+
+  Rectangle handle = {sliderTrack.x + sliderTrack.width * currentVolume - 5.0f, contentY + 6.0f, 10.0f, 20.0f};
+  Rectangle sliderHit = {sliderTrack.x - 8.0f, contentY + 4.0f, sliderTrack.width + 16.0f, 28.0f};
+
+  if (CheckCollisionPointRec(mouse, sliderHit) && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) {
+    float newVal = (mouse.x - sliderTrack.x) / sliderTrack.width;
+    newVal = std::clamp(newVal, 0.0f, 1.0f);
+    Fumbo::Engine::Instance().GetAudioManager().SetMasterVolume(newVal);
+  }
+
+  bool handleHover = CheckCollisionPointRec(mouse, handle);
+  Color handleColor = (handleHover || (CheckCollisionPointRec(mouse, sliderHit) && IsMouseButtonDown(MOUSE_BUTTON_LEFT))) ? Color{0,0,128,255} : Color{192,192,192,255};
+  Fumbo::Graphic2D::DrawRectangleRec(handle, handleColor);
+  // Handle 3D border
+  Fumbo::Graphic2D::DrawLineEx({handle.x, handle.y}, {handle.x + handle.width, handle.y}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({handle.x, handle.y}, {handle.x, handle.y + handle.height}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({handle.x + handle.width, handle.y}, {handle.x + handle.width, handle.y + handle.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawLineEx({handle.x, handle.y + handle.height}, {handle.x + handle.width, handle.y + handle.height}, 1.0f, {64,64,64,255});
+
+  // Volume % label
+  std::string volLabel = std::to_string((int)(currentVolume * 100)) + "%";
+  Fumbo::Graphic2D::DrawText(volLabel.c_str(), {sliderTrack.x + sliderTrack.width + 8.0f, contentY + 8.0f}, OS::GlobalFont, 10, BLACK);
+
+  contentY += 50.0f;
+
+  // ----- OK button -----
+  Rectangle btnOK = {PANEL_X + PANEL_W * 0.5f - 40.0f, contentY + 8.0f, 80.0f, 24.0f};
+  bool okHover = CheckCollisionPointRec(mouse, btnOK);
+  Fumbo::Graphic2D::DrawRectangleRec(btnOK, okHover ? Color{180,180,180,255} : Color{192,192,192,255});
+  Fumbo::Graphic2D::DrawLineEx({btnOK.x, btnOK.y}, {btnOK.x + btnOK.width, btnOK.y}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({btnOK.x, btnOK.y}, {btnOK.x, btnOK.y + btnOK.height}, 1.0f, WHITE);
+  Fumbo::Graphic2D::DrawLineEx({btnOK.x + btnOK.width, btnOK.y}, {btnOK.x + btnOK.width, btnOK.y + btnOK.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawLineEx({btnOK.x, btnOK.y + btnOK.height}, {btnOK.x + btnOK.width, btnOK.y + btnOK.height}, 1.0f, {64,64,64,255});
+  Fumbo::Graphic2D::DrawText("OK", {btnOK.x + 30.0f, btnOK.y + 6.0f}, OS::GlobalFont, 11, BLACK);
+
+  if (okHover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    m_showSettings = false;
+    Fumbo::Engine::Instance().GetAudioManager().PlaySound("click");
+  }
 }

@@ -116,7 +116,7 @@ void DemoDesktop::Init() {
 
   // Welcome notification
   m_desktop->Notify("Welcome",
-                    "Fumbo OS is ready. Double-click an icon to start.");
+                    "Sentinels OS is ready. Double-click an icon to start.");
 
   m_desktop->SetWallpaper(m_wallpaper);
 
@@ -771,7 +771,7 @@ void DemoDesktop::SetupStartMenu() {
   });
 
   m_desktop->AddStartMenuItem("About", [this]() {
-    m_desktop->OpenWindow("About Fumbo OS", {350, 200, 350, 180},
+    m_desktop->OpenWindow("About Sentinels OS", {350, 200, 350, 180},
                           DrawAboutContent);
   });
 }
@@ -804,8 +804,8 @@ void DemoDesktop::SetupContextMenu() {
 
   ctxMenu.AddSeparator();
 
-  ctxMenu.AddItem("About Fumbo OS", [this]() {
-    m_desktop->OpenWindow("About", {350, 200, 350, 200}, DrawAboutContent);
+  ctxMenu.AddItem("About Sentinels OS", [this]() {
+    m_desktop->OpenWindow("About Sentinels OS", {350, 200, 350, 200}, DrawAboutContent);
   });
 }
 

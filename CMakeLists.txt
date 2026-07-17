@@ -144,12 +144,21 @@ else()
   message(STATUS "libcurl not found. AI features disabled.")
 endif()
 # Copy the config directory (containing api_key.txt) to the build directory next to the executable
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-    "${CMAKE_SOURCE_DIR}/config"
-    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/config"
-  COMMENT "Copying config directory to output directory..."
-)
+# Only copy if the config directory actually exists (avoids build failures in clean checkouts)
+if(EXISTS "${CMAKE_SOURCE_DIR}/config")
+  add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/config"
+      "$<TARGET_FILE_DIR:${PROJECT_NAME}>/config"
+    COMMENT "Copying config directory to output directory..."
+  )
+else()
+  add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      "$<TARGET_FILE_DIR:${PROJECT_NAME}>/config"
+    COMMENT "Config directory not found, creating empty config directory..."
+  )
+endif()
 
 # ─────────────────────────────────────────────────────────────────────────────
 
