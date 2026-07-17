@@ -6,8 +6,7 @@
 
 int main() {
   Fumbo::Engine::Instance().Init(1280, 720, "Fumbo OS", 60);
-  Fumbo::Assets::AddAssetPack(
-      Fumbo::Engine::Instance().GetAppDir() + "data.fpk");
+  Fumbo::Assets::AddAssetPack("data.fpk");
 
   OS::LoadGlobalAssets();
 
