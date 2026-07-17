@@ -9,6 +9,7 @@ static int s_selectedCommsCard = -1; // Tracks selected card in Comms UI
 static int s_mitigationTab = 0;       // 0=Flood, 1=Wildfire, 2=Volcano
 static bool s_queuedActions[3][5] = {}; // [tab][action] queued state
 static int s_hoveredMitAction = -1;    // Currently hovered action index
+static bool s_showEndShiftConfirm = false;
 // IGameState interface: delegates to OSDesktop
 
 void DemoDesktop::Init() {
@@ -23,6 +24,7 @@ void DemoDesktop::Init() {
   m_decisionLog.clear();
   m_selectedDecisionLogEntry = -1;
   m_decisionLogScroll = 0;
+  s_showEndShiftConfirm = false;
 
   // Setup all OS components
   SetupDesktopIcons();
@@ -1097,23 +1099,49 @@ void DemoDesktop::DrawMitigationHub(Rectangle area) {
     Fumbo::Graphic2D::DrawText(countStr, {endBtn.x + btnW - 30.0f, endBtn.y + 10.0f}, font, 10, {255, 215, 0, 255});
   }
 
-  // Execute on click
-  if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && queueCount > 0) {
-    for (int t = 0; t < 3; t++) {
-      for (int a = 0; a < 5; a++) {
-        if (!s_queuedActions[t][a]) continue;
-        std::string disaster = (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
-        std::string sector = (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
-        AddDecisionLogEntry(actions[t][a].name, disaster, sector, "Completed",
-                            (std::string(actions[t][a].budgetImpact) == "---" || std::string(actions[t][a].budgetImpact) == "--" || std::string(actions[t][a].budgetImpact) == "-"
-                                 ? "$5,000"
-                                 : "$10,000"),
-                            "Action executed during the shift");
+  if (s_showEndShiftConfirm && queueCount > 0) {
+    Fumbo::Graphic2D::DrawRectangleRec(area, {12, 14, 21, 220});
+    Rectangle modalRect = {area.x + 70.0f, area.y + 70.0f, area.width - 140.0f, area.height - 140.0f};
+    Fumbo::Graphic2D::DrawRectangleRounded(modalRect, 0.04f, 4, {24, 29, 40, 255});
+    Fumbo::Graphic2D::DrawRectangleRoundedLinesEx(modalRect, 0.04f, 4, 1.2f, {255, 80, 80, 255});
+
+    Fumbo::Graphic2D::DrawText("END SHIFT CONFIRMATION", {modalRect.x + 16.0f, modalRect.y + 16.0f}, font, 11, {255, 215, 0, 255});
+    Fumbo::Graphic2D::DrawText("Lock the current decisions and submit them to the shift audit trail?", {modalRect.x + 16.0f, modalRect.y + 48.0f}, font, 10, {220, 220, 235, 255});
+    Fumbo::Graphic2D::DrawText("This action cannot be edited once confirmed.", {modalRect.x + 16.0f, modalRect.y + 68.0f}, font, 9, {150, 150, 170, 255});
+
+    Rectangle confirmBtn = {modalRect.x + 16.0f, modalRect.y + modalRect.height - 44.0f, 92.0f, 28.0f};
+    Rectangle cancelBtn = {modalRect.x + modalRect.width - 108.0f, modalRect.y + modalRect.height - 44.0f, 92.0f, 28.0f};
+
+    bool confirmHovered = CheckCollisionPointRec(mouse, confirmBtn);
+    bool cancelHovered = CheckCollisionPointRec(mouse, cancelBtn);
+
+    Fumbo::Graphic2D::DrawRectangleRounded(confirmBtn, 0.12f, 4, confirmHovered ? Color{40, 120, 80, 255} : Color{28, 92, 60, 255});
+    Fumbo::Graphic2D::DrawRectangleRounded(cancelBtn, 0.12f, 4, cancelHovered ? Color{80, 80, 95, 255} : Color{50, 55, 70, 255});
+    Fumbo::Graphic2D::DrawText("CONFIRM", {confirmBtn.x + 20.0f, confirmBtn.y + 8.0f}, font, 9, WHITE);
+    Fumbo::Graphic2D::DrawText("CANCEL", {cancelBtn.x + 24.0f, cancelBtn.y + 8.0f}, font, 9, WHITE);
+
+    if (confirmHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      for (int t = 0; t < 3; t++) {
+        for (int a = 0; a < 5; a++) {
+          if (!s_queuedActions[t][a]) continue;
+          std::string disaster = (t == 0) ? "Flood" : (t == 1 ? "Wildfire" : "Volcano");
+          std::string sector = (t == 0) ? "Sector A" : (t == 1 ? "Sector C" : "Sector B");
+          AddDecisionLogEntry(actions[t][a].name, disaster, sector, "Completed",
+                              (std::string(actions[t][a].budgetImpact) == "---" || std::string(actions[t][a].budgetImpact) == "--" || std::string(actions[t][a].budgetImpact) == "-"
+                                   ? "$5,000"
+                                   : "$10,000"),
+                              "Action executed during the shift");
+        }
       }
+      for (int t = 0; t < 3; t++)
+        for (int a = 0; a < 5; a++)
+          s_queuedActions[t][a] = false;
+      s_showEndShiftConfirm = false;
+    } else if (cancelHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+      s_showEndShiftConfirm = false;
     }
-    for (int t = 0; t < 3; t++)
-      for (int a = 0; a < 5; a++)
-        s_queuedActions[t][a] = false;
+  } else if (endHovered && IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && queueCount > 0) {
+    s_showEndShiftConfirm = true;
   }
 }
 
