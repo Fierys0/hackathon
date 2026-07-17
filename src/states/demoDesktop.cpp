@@ -2544,14 +2544,14 @@ void DemoDesktop::DrawStatusBar() {
     statusColor = {215, 100, 0, 255}; // Orange
   else if (m_cityStatus == "CRITICAL" || m_cityStatus == "EVACUATE")
     statusColor = {180, 0, 0, 255}; // Red
-  Fumbo::Graphic2D::DrawText(m_cityStatus, {290.0f, textY}, font, 12,
+  Fumbo::Graphic2D::DrawText(m_cityStatus, {335.0f, textY}, font, 12,
                              statusColor);
 
   // 3. Budget
   DrawInsetBox({580.0f, 4.0f, 320.0f, 22.0f});
   Fumbo::Graphic2D::DrawText("BUDGET: ", {590.0f, textY}, font, 12, BLACK);
   std::string budgetValText = "$" + std::to_string(gs.budget);
-  Fumbo::Graphic2D::DrawText(budgetValText, {660.0f, textY}, font, 12,
+  Fumbo::Graphic2D::DrawText(budgetValText, {685.0f, textY}, font, 12,
                              {0, 128, 0, 255});
 
   // 4. Public Trust
@@ -2564,90 +2564,7 @@ void DemoDesktop::DrawStatusBar() {
     trustColor = {180, 0, 0, 255};
   else if (gs.publicTrust < 70)
     trustColor = {215, 100, 0, 255};
-  Fumbo::Graphic2D::DrawText(trustText, {1040.0f, textY}, font, 12, trustColor);
-
-  // 5. City Status Indicator (Overall Health)
-  // Calculate overall city status from existing GameState values
-  // Formula: Population Safety (40%) + Infrastructure (25%) + Public Trust
-  // (20%) + Emergency Capacity (15%)
-
-  // Population Safety: Based on casualties vs people saved ratio
-  float populationSafety = 100.0f;
-  int totalAffected = gs.peopleSaved + gs.casualties;
-  if (totalAffected > 0) {
-    populationSafety = (static_cast<float>(gs.peopleSaved) /
-                        static_cast<float>(totalAffected)) *
-                       100.0f;
-  }
-
-  // Infrastructure: Inverted damage percentage (100 - damage%)
-  float infrastructureHealth =
-      100.0f - static_cast<float>(gs.infrastructureDamage);
-  if (infrastructureHealth < 0.0f)
-    infrastructureHealth = 0.0f;
-
-  // Public Trust: Already 0-100 scale
-  float publicTrustScore = static_cast<float>(gs.publicTrust);
-
-  // Emergency Capacity: Based on remaining rescue teams and budget
-  float rescueTeamCapacity = (static_cast<float>(gs.rescueTeams) / 3.0f) *
-                             100.0f; // 3 is initial count
-  float budgetCapacity = (static_cast<float>(gs.budget) / 50000.0f) *
-                         100.0f; // 50000 is initial budget
-  float emergencyCapacity = (rescueTeamCapacity + budgetCapacity) / 2.0f;
-  if (emergencyCapacity > 100.0f)
-    emergencyCapacity = 100.0f;
-
-  // Calculate weighted overall score
-  float overallCityStatus =
-      (populationSafety * 0.40f) + (infrastructureHealth * 0.25f) +
-      (publicTrustScore * 0.20f) + (emergencyCapacity * 0.15f);
-
-  // Clamp to 0-100 range
-  if (overallCityStatus > 100.0f)
-    overallCityStatus = 100.0f;
-  if (overallCityStatus < 0.0f)
-    overallCityStatus = 0.0f;
-
-  // Determine status label and color based on percentage
-  std::string statusLabel;
-  Color statusIndicatorColor;
-
-  if (overallCityStatus >= 80.0f) {
-    statusLabel = "STABLE";
-    statusIndicatorColor = {0, 180, 0, 255}; // Bright green
-  } else if (overallCityStatus >= 60.0f) {
-    statusLabel = "CONCERN";
-    statusIndicatorColor = {215, 170, 0, 255}; // Yellow-orange
-  } else if (overallCityStatus >= 40.0f) {
-    statusLabel = "CRITICAL";
-    statusIndicatorColor = {255, 140, 0, 255}; // Orange
-  } else if (overallCityStatus >= 20.0f) {
-    statusLabel = "EMERGENCY";
-    statusIndicatorColor = {255, 60, 0, 255}; // Red-orange
-  } else {
-    statusLabel = "COLLAPSE";
-    statusIndicatorColor = {200, 0, 0, 255}; // Dark red
-  }
-
-  // Draw City Status Indicator box (positioned after Public Trust)
-  float cityStatusX = 1260.0f;
-  DrawInsetBox({cityStatusX, 4.0f, 340.0f, 22.0f});
-
-  // Draw label
-  Fumbo::Graphic2D::DrawText("CITY: ", {cityStatusX + 10.0f, textY}, font, 12,
-                             BLACK);
-
-  // Draw percentage
-  char percentBuf[8];
-  snprintf(percentBuf, sizeof(percentBuf), "%d%%",
-           static_cast<int>(overallCityStatus));
-  Fumbo::Graphic2D::DrawText(percentBuf, {cityStatusX + 50.0f, textY}, font, 12,
-                             statusIndicatorColor);
-
-  // Draw status label
-  Fumbo::Graphic2D::DrawText(" | " + statusLabel, {cityStatusX + 90.0f, textY},
-                             font, 12, statusIndicatorColor);
+  Fumbo::Graphic2D::DrawText(trustText, {1090.0f, textY}, font, 12, trustColor);
 }
 
 void DemoDesktop::OpenTutorialWindow() {

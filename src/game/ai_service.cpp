@@ -13,7 +13,16 @@ namespace Game {
 std::string AIService::LoadAPIKey() {
     std::ifstream file("config/api_key.txt");
     if (!file.is_open()) {
-        std::cerr << "[AIService] ERROR: Could not open config/api_key.txt\n";
+        file.open("../config/api_key.txt");
+    }
+    if (!file.is_open()) {
+        file.open("../../config/api_key.txt");
+    }
+    if (!file.is_open()) {
+        file.open("build/hackathon/config/api_key.txt");
+    }
+    if (!file.is_open()) {
+        std::cerr << "[AIService] ERROR: Could not open config/api_key.txt in any location.\n";
         return "";
     }
     std::string key;
@@ -43,9 +52,16 @@ static size_t WriteCallback(void* contents, size_t size, size_t nmemb, void* use
     return totalSize;
 }
 
+static std::string ExtractTextResponse(const std::string& str);
+
 // Simple JSON parser scanning for "headline" and "body"
 static AIReportResult ParseResponse(const std::string& rawResponse) {
     AIReportResult result;
+    std::string textContent = ExtractTextResponse(rawResponse);
+    if (textContent.empty()) {
+        result.success = false;
+        return result;
+    }
     
     auto extractValue = [](const std::string& str, const std::string& key) -> std::string {
         std::string pattern = "\"" + key + "\"";
@@ -82,8 +98,8 @@ static AIReportResult ParseResponse(const std::string& rawResponse) {
         return val;
     };
 
-    result.headline = extractValue(rawResponse, "headline");
-    result.body = extractValue(rawResponse, "body");
+    result.headline = extractValue(textContent, "headline");
+    result.body = extractValue(textContent, "body");
     result.success = !result.headline.empty() && !result.body.empty();
     return result;
 }
@@ -124,7 +140,7 @@ std::future<AIReportResult> AIService::RequestDynamicReportAsync(
         }
 
         // Use X-goog-api-key header auth (matches the Google AI Studio curl format)
-        std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+        std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
         
         // Construct system context prompt and parameters
         std::stringstream promptStream;
@@ -199,7 +215,11 @@ std::future<AIReportResult> AIService::RequestDynamicReportAsync(
 
         if (res == CURLE_OK && !response.data.empty()) {
             result = ParseResponse(response.data);
+            if (!result.success) {
+                std::cerr << "[AIService ERROR] Failed to parse dynamic report response. Raw response:\n" << response.data << "\n";
+            }
         } else {
+            std::cerr << "[AIService ERROR] curl_easy_perform failed or empty response. Code: " << res << ", Error: " << curl_easy_strerror(res) << "\n";
             result.success = false;
         }
         return result;
@@ -274,7 +294,7 @@ std::future<AIChatResult> AIService::RequestChatResponseAsync(
         }
 
         // Use X-goog-api-key header auth (matches the Google AI Studio curl format)
-        std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+        std::string url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
 
         std::stringstream promptStream;
         promptStream << "You are roleplaying as " << characterName << " inside a serious disaster management game. "
@@ -339,9 +359,11 @@ std::future<AIChatResult> AIService::RequestChatResponseAsync(
                 result.message = textResponse;
                 result.success = true;
             } else {
+                std::cerr << "[AIService ERROR] Failed to extract text from chat response. Raw response:\n" << response.data << "\n";
                 result.success = false;
             }
         } else {
+            std::cerr << "[AIService ERROR] curl_easy_perform failed or empty response in chat. Code: " << res << ", Error: " << curl_easy_strerror(res) << "\n";
             result.success = false;
         }
         return result;
