@@ -226,6 +226,10 @@ void OSDesktop::ClearDesktopIcons() {
   m_selectedIcon = -1;
 }
 
+const std::vector<DesktopIcon> &OSDesktop::GetDesktopIcons() const {
+  return m_icons;
+}
+
 void OSDesktop::ArrangeIcons() {
   float x = m_desktopStyle.iconMarginX;
   float y = m_desktopStyle.iconMarginY;

@@ -5,14 +5,16 @@ namespace OS {
 Font GlobalFont{};
 
 void LoadGlobalAssets() {
-  // Load default font: replace with a custom font from assets if desired
-  // e.g. GlobalFont = Fumbo::Assets::LoadFont("assets/fonts/MyFont.ttf", 96);
-  GlobalFont = GetFontDefault();
+  GlobalFont = Fumbo::Assets::LoadFont("assets/fonts/W95F.otf", 24);
+  if (GlobalFont.texture.id == 0) {
+    GlobalFont = GetFontDefault();
+  }
 }
 
 void UnloadGlobalAssets() {
-  // Unload custom fonts here if loaded
-  // e.g. UnloadFont(GlobalFont);
+  if (GlobalFont.texture.id != 0 && GlobalFont.texture.id != GetFontDefault().texture.id) {
+    UnloadFont(GlobalFont);
+  }
 }
 
 } // namespace OS

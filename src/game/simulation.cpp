@@ -1,6 +1,7 @@
 #include "simulation.hpp"
 #include <string>
 #include <sstream>
+#include <algorithm>
 
 namespace Game {
 
@@ -107,217 +108,307 @@ bool Simulation::ExecuteTurn(GameManager& gameManager) {
 }
 
 bool Simulation::ValidateActions(const GameState& gameState) {
-    // PLACEHOLDER: Basic validation that will be expanded in future implementation
+    int totalBudgetCost = 0;
+    int totalRescueTeamsRequired = 0;
     
-    // In future implementation, this will:
-    // - Check if budget is sufficient for all selected actions
-    // - Check if rescue teams are available
-    // - Validate action combinations (some actions may conflict)
-    // - Check time constraints for certain actions
-    // - Validate against current disaster conditions
-    
-    // For now, implement a simple validation:
-    // 1. Check that we don't exceed maximum budget per window (placeholder value)
-    const int MAX_BUDGET_PER_WINDOW = 10000;
-    int estimatedCost = static_cast<int>(gameState.selectedActions.size()) * 2000; // Placeholder cost
-    
-    if (gameState.budget < estimatedCost) {
-        // TODO: Log validation failure - insufficient budget
-        return false;
+    DisasterType type = DisasterType::Flood;
+    if (gameState.currentShift == 2) {
+        type = DisasterType::Wildfire;
+    } else if (gameState.currentShift >= 3) {
+        type = DisasterType::Earthquake; // Volcano
     }
-    
-    // 2. Check that we don't exceed available rescue teams
-    int rescueActionsCount = 0;
+
     for (ActionID action : gameState.selectedActions) {
-        // In future, we'll have a mapping of which actions require rescue teams
-        // For now, just count a few specific actions
-        if (action == ActionID::DeployRescue || action == ActionID::RequestAirSupport) {
-            rescueActionsCount++;
-        }
+        totalBudgetCost += GetActionBudgetCost(action, type);
+        totalRescueTeamsRequired += GetActionRescueTeamCost(action, type);
     }
-    
-    if (rescueActionsCount > gameState.rescueTeams) {
-        // TODO: Log validation failure - insufficient rescue teams
+
+    if (gameState.budget < totalBudgetCost) {
         return false;
     }
-    
-    // TODO: Add more validation checks as needed
-    
-    return true; // All validations passed (placeholder)
+
+    if (gameState.rescueTeams < totalRescueTeamsRequired) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool HasAction(const GameState& gs, ActionID aid) {
+    return std::find(gs.selectedActions.begin(), gs.selectedActions.end(), aid) != gs.selectedActions.end();
 }
 
 void Simulation::EvaluateOutcomes(GameManager& gameManager) {
     GameState& gs = gameManager.GetGameState();
     const ThreatCenterState& threat = gameManager.GetCurrentThreatCenter();
-    const Scenario& scenario = gameManager.GetScenario();
 
-    // Delegate to disaster-specific evaluators
-    // Default adjustments
-    switch (scenario.disasterType) {
-        case DisasterType::Flood:
-            {
-                // Simple flood rules
-                // If river is deep and no early warning issued, heavy casualties
-                EvaluateFlood(gs, threat);
-            }
-            break;
-        case DisasterType::Wildfire:
-            EvaluateWildfire(gs, threat);
-            break;
-        case DisasterType::Earthquake:
-            EvaluateEarthquake(gs, threat);
-            break;
+    // Map current shift to its respective disaster evaluation dynamically
+    int shift = gs.currentShift;
+    if (shift == 1 || shift == 4) {
+        EvaluateFlood(gs, threat);
+    } else if (shift == 2 || shift == 5) {
+        EvaluateWildfire(gs, threat);
+    } else {
+        EvaluateEarthquake(gs, threat);
     }
 
-    // Clamp public trust into reasonable bounds [0,100]
     if (gs.publicTrust < 0) gs.publicTrust = 0;
     if (gs.publicTrust > 100) gs.publicTrust = 100;
 }
 
 void Simulation::EvaluateFlood(GameState& gs, const ThreatCenterState& threat) {
-    // Balancing knobs can be adjusted here
     const float riverDepth = threat.flood.riverDepth;
+    
+    bool evac = HasAction(gs, ActionID::EvacuateResidents);
+    bool warning = gs.earlyWarningIssued;
+    bool floodgate = gs.sheltersOpened;
+    bool bridgeClosed = HasAction(gs, ActionID::CloseRoad);
 
-    if (riverDepth > 5.0f && !gs.earlyWarningIssued) {
-        gs.casualties += 200; // major event when no warning
-        gs.publicTrust -= 8;
+    int stepCasualties = 0;
+    int stepSaved = 0;
+    int stepDamage = 0;
+
+    if (evac && gs.currentWindow <= 1) {
+        gs.publicTrust -= 15;
     }
 
-    if (gs.sheltersOpened) {
-        gs.peopleSaved += 150; // shelters provide large safety
-        gs.publicTrust += 3;
+    if (riverDepth > 4.5f) {
+        stepCasualties += 80;
+        stepDamage += 15;
+
+        if (warning) {
+            stepCasualties -= 40;
+            stepSaved += 50;
+        }
+
+        if (evac) {
+            stepCasualties -= 60;
+            stepSaved += 150;
+        }
+
+        if (m_teamsDeployedThisTurn > 0) {
+            stepCasualties -= m_teamsDeployedThisTurn * 20;
+            stepSaved += m_teamsDeployedThisTurn * 30;
+        }
+
+        if (!bridgeClosed) {
+            stepCasualties += 30;
+            stepDamage += 10;
+        } else {
+            stepSaved += 20;
+        }
     }
 
-    // Rescue teams deployed this turn save additional people
-    gs.peopleSaved += m_teamsDeployedThisTurn * 20;
+    if (riverDepth > 5.5f) {
+        if (!floodgate) {
+            stepCasualties += 120;
+            stepDamage += 30;
+            gs.publicTrust -= 15;
+        } else {
+            stepDamage += 10;
+            stepSaved += 80;
+            gs.publicTrust -= 5;
+        }
+    }
 
-    // Doing nothing penalty
-    if (m_teamsDeployedThisTurn == 0 && !gs.sheltersOpened && !gs.earlyWarningIssued) {
-        gs.casualties += 50;
-        gs.publicTrust -= 4;
+    if (stepCasualties < 0) stepCasualties = 0;
+    gs.casualties += stepCasualties;
+    gs.peopleSaved += stepSaved;
+    gs.infrastructureDamage = std::min(100, gs.infrastructureDamage + stepDamage);
+
+    if (stepCasualties > 0) {
+        gs.publicTrust -= stepCasualties / 10;
+    } else if (riverDepth > 4.5f) {
+        gs.publicTrust += 5;
     }
 }
 
 void Simulation::EvaluateWildfire(GameState& gs, const ThreatCenterState& threat) {
-    // Simple wildfire rules
-    if (m_teamsDeployedThisTurn > 0) {
-        gs.casualties = std::max(0, gs.casualties - m_teamsDeployedThisTurn * 15);
-        gs.publicTrust += 2 * m_teamsDeployedThisTurn;
+    const float temp = threat.wildfire.temperature;
+    const float humidity = threat.wildfire.humidity;
+    
+    bool warning = gs.earlyWarningIssued;
+    bool evac = HasAction(gs, ActionID::EvacuateResidents);
+    bool air = m_airSupportSpentThisTurn > 0;
+    bool parkClosed = HasAction(gs, ActionID::CloseRoad);
+    
+    int stepCasualties = 0;
+    int stepSaved = 0;
+    int stepDamage = 0;
+
+    if (evac && gs.currentWindow <= 1) {
+        gs.publicTrust -= 10;
     }
 
-    if (m_airSupportSpentThisTurn > 0) {
-        gs.infrastructureDamage = std::max(0, gs.infrastructureDamage - 5);
-        gs.publicTrust += 1;
+    if (temp > 37.0f && humidity < 15.0f) {
+        stepCasualties += 50;
+        stepDamage += 15;
+
+        if (warning) {
+            stepCasualties -= 20;
+            stepSaved += 30;
+        }
+
+        if (evac) {
+            stepCasualties -= 40;
+            stepSaved += 100;
+        }
+
+        if (m_teamsDeployedThisTurn > 0) {
+            stepCasualties -= m_teamsDeployedThisTurn * 15;
+            stepSaved += m_teamsDeployedThisTurn * 25;
+            stepDamage -= m_teamsDeployedThisTurn * 5;
+        }
+
+        if (!parkClosed) {
+            stepCasualties += 25;
+        } else {
+            stepSaved += 15;
+        }
     }
 
-    if (m_roadsClosedThisTurn > 0) {
-        gs.casualties = std::max(0, gs.casualties - m_roadsClosedThisTurn * 5);
+    if (temp > 40.0f) {
+        if (!air) {
+            stepCasualties += 80;
+            stepDamage += 25;
+        } else {
+            stepDamage += 5;
+            stepSaved += 120;
+            gs.publicTrust += 8;
+        }
+    }
+
+    if (stepCasualties < 0) stepCasualties = 0;
+    gs.casualties += stepCasualties;
+    gs.peopleSaved += stepSaved;
+    gs.infrastructureDamage = std::min(100, std::max(0, gs.infrastructureDamage + stepDamage));
+
+    if (stepCasualties > 0) {
+        gs.publicTrust -= stepCasualties / 8;
+    } else if (temp > 37.0f) {
+        gs.publicTrust += 6;
     }
 }
 
 void Simulation::EvaluateEarthquake(GameState& gs, const ThreatCenterState& threat) {
-    // Simple earthquake rules
-    if (m_teamsDeployedThisTurn > 0) {
-        gs.peopleSaved += m_teamsDeployedThisTurn * 25;
-        gs.publicTrust += 2 * m_teamsDeployedThisTurn;
+    const int tremors = threat.earthquake.tremorsPerHour;
+    const float gas = threat.earthquake.gasEmission;
+    
+    bool warning = gs.earlyWarningIssued;
+    bool evac = HasAction(gs, ActionID::EvacuateResidents);
+    bool airportClosed = HasAction(gs, ActionID::CloseRoad);
+    bool shelter = gs.sheltersOpened;
+    
+    int stepCasualties = 0;
+    int stepSaved = 0;
+    int stepDamage = 0;
+
+    if (evac && gs.currentWindow <= 1) {
+        gs.publicTrust -= 20;
     }
 
-    if (gs.sheltersOpened) {
-        gs.peopleSaved += 80;
-        gs.publicTrust += 2;
+    if (tremors > 12 || gas > 250.0f) {
+        stepCasualties += 70;
+        stepDamage += 20;
+
+        if (warning) {
+            stepCasualties -= 30;
+            stepSaved += 50;
+        }
+
+        if (evac) {
+            stepCasualties -= 50;
+            stepSaved += 180;
+        }
+
+        if (m_teamsDeployedThisTurn > 0) {
+            stepCasualties -= m_teamsDeployedThisTurn * 25;
+            stepSaved += m_teamsDeployedThisTurn * 35;
+        }
+
+        if (!airportClosed) {
+            stepCasualties += 40;
+            stepDamage += 15;
+        } else {
+            stepSaved += 30;
+        }
     }
 
-    if (!gs.earlyWarningIssued) {
-        // small benefit if warning was issued
-        gs.casualties += 30;
+    if (tremors > 30) {
+        if (!shelter) {
+            stepCasualties += 90;
+            stepDamage += 10;
+        } else {
+            stepSaved += 100;
+        }
+    }
+
+    if (stepCasualties < 0) stepCasualties = 0;
+    gs.casualties += stepCasualties;
+    gs.peopleSaved += stepSaved;
+    gs.infrastructureDamage = std::min(100, gs.infrastructureDamage + stepDamage);
+
+    if (stepCasualties > 0) {
+        gs.publicTrust -= stepCasualties / 10;
+    } else if (tremors > 12) {
+        gs.publicTrust += 8;
     }
 }
 
 void Simulation::ProcessActions(GameManager& gameManager) {
     GameState& gs = gameManager.GetGameState();
 
-    // Placeholder cost constants — these will be moved to a catalog later
-    const int AIR_SUPPORT_COST = 5000;
+    DisasterType type = DisasterType::Flood;
+    if (gs.currentShift == 2) {
+        type = DisasterType::Wildfire;
+    } else if (gs.currentShift >= 3) {
+        type = DisasterType::Earthquake;
+    }
 
     for (ActionID action : gs.selectedActions) {
+        int cost = GetActionBudgetCost(action, type);
+        int teams = GetActionRescueTeamCost(action, type);
+
+        gs.budget -= cost;
+        gs.rescueTeams -= teams;
+
         switch (action) {
             case ActionID::IssueWarning:
-                // Immediate persistent effect: mark that early warning has been issued
                 gs.earlyWarningIssued = true;
                 break;
 
             case ActionID::DeployRescue:
-                // Consume one rescue team if available; otherwise skip
-                if (gs.rescueTeams > 0) {
-                    gs.rescueTeams -= 1;
-                    m_teamsDeployedThisTurn += 1;
-                } else {
-                    // Not enough teams — action ignored
-                }
+                m_teamsDeployedThisTurn += 1;
                 break;
 
             case ActionID::OpenShelter:
-                // Persistent effect for the shift
                 gs.sheltersOpened = true;
                 break;
 
             case ActionID::CloseRoad:
-                // Simple per-turn counter to indicate roads were closed this window
                 m_roadsClosedThisTurn += 1;
                 break;
 
             case ActionID::RequestAirSupport:
-                // Spend budget only if available; otherwise skip
-                if (gs.budget >= AIR_SUPPORT_COST) {
-                    gs.budget -= AIR_SUPPORT_COST;
-                    m_airSupportSpentThisTurn += 1;
-                } else {
-                    // Insufficient budget: action ignored
-                }
+                m_airSupportSpentThisTurn += 1;
+                break;
+
+            case ActionID::EvacuateResidents:
+                // Evaluated in the outcomes
                 break;
 
             default:
-                // Unknown or unhandled action — add TODOs for future action types
-                // e.g., ActionID::EvacuateResidents
                 break;
         }
     }
 }
 
 bool Simulation::AdvanceWindow(GameManager& gameManager) {
-    // PLACEHOLDER: Window advancement with future transition logic
+    GameState& gs = gameManager.GetGameState();
+    // Replenish rescue teams for the next window
+    gs.rescueTeams = 3;
     
-    // In future implementation, this will:
-    // - Apply any time-based effects (disaster progression, public trust changes)
-    // - Handle window transition animations/events
-    // - Update any time-sensitive game state
-    
-    // For now, simply delegate to GameManager::NextWindow()
     bool windowAdvanced = gameManager.NextWindow();
-    
-    if (windowAdvanced) {
-        // TODO: Apply time-based effects here in future
-        // - Reduce budget for ongoing operations
-        // - Update public trust based on time passing
-        // - Progress disaster states
-        
-        // Example future code:
-        // TimeBasedEffects timeEffects;
-        // timeEffects.ApplyWindowTransition(gameManager);
-    } else {
-        // Shift has ended
-        // TODO: Trigger shift summary and prepare for next shift
-        // - Calculate final shift statistics
-        // - Generate shift summary report
-        // - Reset window counter for next shift
-        // - Increment shift number
-        
-        // Example future code:
-        // ShiftSummary summary = CalculateShiftSummary(gameManager);
-        // ShowShiftSummaryScreen(summary);
-        // PrepareForNextShift(gameManager);
-    }
-    
     return windowAdvanced;
 }
 
@@ -408,6 +499,34 @@ void Simulation::GenerateComms(GameManager& gameManager) {
         full << "Local residents report: " << pr.str() << " Community response teams are coordinating support.";
         setReport(comms.citizen, ReportType::Citizen, "Community update", pr.str(), full.str(), ReportPriority::Medium);
     }
+}
+
+int Simulation::GetActionBudgetCost(ActionID id, DisasterType type) {
+    switch (id) {
+        case ActionID::IssueWarning:
+            return 1000;
+        case ActionID::DeployRescue:
+            return 5000;
+        case ActionID::OpenShelter:
+            return (type == DisasterType::Flood) ? 1000 : 5000;
+        case ActionID::CloseRoad:
+            return (type == DisasterType::Earthquake) ? 5000 : 1000;
+        case ActionID::RequestAirSupport:
+            return 10000;
+        case ActionID::EvacuateResidents:
+            return (type == DisasterType::Wildfire) ? 5000 : 12000;
+    }
+    return 0;
+}
+
+int Simulation::GetActionRescueTeamCost(ActionID id, DisasterType type) {
+    if (id == ActionID::DeployRescue) {
+        return 1;
+    }
+    if (id == ActionID::EvacuateResidents) {
+        return (type == DisasterType::Wildfire) ? 1 : 2;
+    }
+    return 0;
 }
 
 } // namespace Game

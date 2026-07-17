@@ -1,1 +1,3 @@
 build/
+config/api_key.txt
+build_windows/

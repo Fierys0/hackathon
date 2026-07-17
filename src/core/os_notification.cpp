@@ -34,6 +34,9 @@ void NotificationManager::Push(const std::string &title,
 
   m_notifications.push_back(std::move(notif));
 
+  // Play retro notification sound
+  Fumbo::Engine::Instance().GetAudioManager().PlaySound("notification");
+
   // Trim excess
   while ((int)m_notifications.size() > m_maxVisible * 2) {
     m_notifications.erase(m_notifications.begin());

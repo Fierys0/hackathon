@@ -1,0 +1,18 @@
+# Cross-compilation: target Windows x86_64 from Linux using MinGW
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+
+set(MINGW_PREFIX "x86_64-w64-mingw32")
+
+set(CMAKE_C_COMPILER   /usr/bin/${MINGW_PREFIX}-gcc)
+set(CMAKE_CXX_COMPILER /usr/bin/${MINGW_PREFIX}-g++)
+set(CMAKE_RC_COMPILER  /usr/bin/${MINGW_PREFIX}-windres)
+
+set(CMAKE_FIND_ROOT_PATH /usr/${MINGW_PREFIX})
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static-libgcc -static-libstdc++")
+set(MINGW_PREFIX "${MINGW_PREFIX}" CACHE STRING "MinGW toolchain prefix")

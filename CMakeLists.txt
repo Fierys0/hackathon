@@ -95,6 +95,73 @@ target_link_libraries(${PROJECT_NAME}
         fumbo_engine
 )
 
+find_package(CURL)
+
+# ─── CURL & HAS_CURL ─────────────────────────────────────────────────────────
+if(WIN32 OR MINGW)
+  # When building for Windows, use the bundled static curl from lib/windows/curl
+  set(WINDOWS_CURL_DIR "${CMAKE_SOURCE_DIR}/lib/windows/curl")
+  if(EXISTS "${WINDOWS_CURL_DIR}/include/curl/curl.h")
+    message(STATUS "Using bundled Windows curl from ${WINDOWS_CURL_DIR}")
+    add_compile_definitions(HAS_CURL=1)
+    add_compile_definitions(CURL_STATICLIB=1)
+    target_include_directories(${PROJECT_NAME} PRIVATE "${WINDOWS_CURL_DIR}/include")
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        "${WINDOWS_CURL_DIR}/lib/libcurl.a"
+        "${WINDOWS_CURL_DIR}/lib/libssh2.a"
+        "${WINDOWS_CURL_DIR}/lib/libngtcp2_crypto_libressl.a"
+        "${WINDOWS_CURL_DIR}/lib/libngtcp2.a"
+        "${WINDOWS_CURL_DIR}/lib/libnghttp3.a"
+        "${WINDOWS_CURL_DIR}/lib/libnghttp2.a"
+        "${WINDOWS_CURL_DIR}/lib/libpsl.a"
+        "${WINDOWS_CURL_DIR}/lib/libssl.a"
+        "${WINDOWS_CURL_DIR}/lib/libcrypto.a"
+        "${WINDOWS_CURL_DIR}/lib/libz.a"
+        "${WINDOWS_CURL_DIR}/lib/libzstd.a"
+        "${WINDOWS_CURL_DIR}/lib/libbrotlidec.a"
+        "${WINDOWS_CURL_DIR}/lib/libbrotlicommon.a"
+        # Windows-specific socket libraries needed by curl
+        ws2_32 crypt32 wldap32 bcrypt secur32 iphlpapi
+    )
+    # Copy the curl CA bundle to output directory so HTTPS works at runtime
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${WINDOWS_CURL_DIR}/bin/curl-ca-bundle.crt"
+        "$<TARGET_FILE_DIR:${PROJECT_NAME}>/curl-ca-bundle.crt"
+      COMMENT "Copying curl CA bundle to output directory"
+    )
+    # Set the SSL cert bundle path via compile definition
+    add_compile_definitions(CURL_CA_BUNDLE="curl-ca-bundle.crt")
+  else()
+    message(WARNING "Windows curl bundle not found at ${WINDOWS_CURL_DIR}. AI features disabled.")
+  endif()
+elseif(CURL_FOUND)
+  # Linux / macOS: use system curl
+  add_compile_definitions(HAS_CURL=1)
+  target_link_libraries(${PROJECT_NAME} PRIVATE ${CURL_LIBRARIES})
+  target_include_directories(${PROJECT_NAME} PRIVATE ${CURL_INCLUDE_DIRS})
+else()
+  message(STATUS "libcurl not found. AI features disabled.")
+endif()
+# Copy the config directory (containing api_key.txt) to the build directory next to the executable
+# Only copy if the config directory actually exists (avoids build failures in clean checkouts)
+if(EXISTS "${CMAKE_SOURCE_DIR}/config")
+  add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+      "${CMAKE_SOURCE_DIR}/config"
+      "$<TARGET_FILE_DIR:${PROJECT_NAME}>/config"
+    COMMENT "Copying config directory to output directory..."
+  )
+else()
+  add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+      "$<TARGET_FILE_DIR:${PROJECT_NAME}>/config"
+    COMMENT "Config directory not found, creating empty config directory..."
+  )
+endif()
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 if(WIN32)
   # winmm is linked transitively by raylib if needed
   # Salin DLL standar MinGW jika melakukan cross-compiling
@@ -112,4 +179,36 @@ if(WIN32)
     endforeach()
   endif()
 endif()
+
+# Build standalone test runner for AIService
+add_executable(test_ai src/game/ai_service.cpp src/test_ai.cpp)
+target_include_directories(test_ai PRIVATE src)
+if(WIN32 OR MINGW)
+  set(WINDOWS_CURL_DIR "${CMAKE_SOURCE_DIR}/lib/windows/curl")
+  if(EXISTS "${WINDOWS_CURL_DIR}/include/curl/curl.h")
+    target_include_directories(test_ai PRIVATE "${WINDOWS_CURL_DIR}/include")
+    target_link_libraries(test_ai PRIVATE
+        "${WINDOWS_CURL_DIR}/lib/libcurl.a"
+        "${WINDOWS_CURL_DIR}/lib/libssh2.a"
+        "${WINDOWS_CURL_DIR}/lib/libngtcp2_crypto_libressl.a"
+        "${WINDOWS_CURL_DIR}/lib/libngtcp2.a"
+        "${WINDOWS_CURL_DIR}/lib/libnghttp3.a"
+        "${WINDOWS_CURL_DIR}/lib/libnghttp2.a"
+        "${WINDOWS_CURL_DIR}/lib/libpsl.a"
+        "${WINDOWS_CURL_DIR}/lib/libssl.a"
+        "${WINDOWS_CURL_DIR}/lib/libcrypto.a"
+        "${WINDOWS_CURL_DIR}/lib/libz.a"
+        "${WINDOWS_CURL_DIR}/lib/libzstd.a"
+        "${WINDOWS_CURL_DIR}/lib/libbrotlidec.a"
+        "${WINDOWS_CURL_DIR}/lib/libbrotlicommon.a"
+        ws2_32 crypt32 wldap32 bcrypt secur32 iphlpapi
+    )
+  endif()
+elseif(CURL_FOUND)
+  target_link_libraries(test_ai PRIVATE ${CURL_LIBRARIES})
+  target_include_directories(test_ai PRIVATE ${CURL_INCLUDE_DIRS})
+endif()
+
+
+
 

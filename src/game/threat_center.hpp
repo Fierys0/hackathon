@@ -13,6 +13,8 @@ struct FloodStatus {
 // These values describe the current seismic activity for the earthquake disaster.
 struct EarthquakeStatus {
   int tremorsPerHour = 7;   // tremors per hour
+  float gasEmission = 120.0f;  // ppm
+  float groundDeformation = 5.0f; // mm
 };
 
 // Data-only snapshot of the wildfire threat state.
