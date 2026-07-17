@@ -3,6 +3,7 @@
 #include "fumbo.hpp"
 #include "raylib.h"
 #include <vector>
+#include "../game/game_manager.hpp"
 
 // DemoDesktop: Demo state showing OS simulation features
 
@@ -32,6 +33,11 @@ private:
   int m_budget;
   int m_publicTrust;
   std::string m_cityStatus;
+  int m_shiftNumber;
+  int m_currentTimeWindowIndex;
+  std::string m_currentTimeLabel;
+  bool m_shiftSummaryVisible;
+  bool m_shiftBriefingVisible;
 
   std::vector<DecisionLogEntry> m_decisionLog;
   int m_selectedDecisionLogEntry;
@@ -47,6 +53,8 @@ private:
                            const std::string &disaster,
                            const std::string &sector, const std::string &status,
                            const std::string &cost, const std::string &outcome);
+  std::string GetCurrentTimeLabel() const;
+  void AdvanceTimeWindow();
 
   // Window content builders
   static void DrawTerminalContent(Rectangle area);
@@ -54,8 +62,8 @@ private:
   static void DrawFileManagerContent(Rectangle area);
   void DrawNotesContent(Rectangle area);
   static void DrawAboutContent(Rectangle area);
-  static void DrawThreatCenterContent(Rectangle area);
-  static void DrawCommsContent(Rectangle area);
+  void DrawThreatCenterContent(Rectangle area);
+  void DrawCommsContent(Rectangle area);
   void DrawMitigationHub(Rectangle area);
   void DrawDecisionLog(Rectangle area);
 
@@ -69,4 +77,6 @@ private:
 
   Fumbo::UI::Textbox m_notesTextbox;
   int m_notesWindowId;
+  // Backend game manager to expose live threat center data to the UI
+  Game::GameManager m_gameManager;
 };
