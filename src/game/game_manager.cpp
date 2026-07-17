@@ -6,7 +6,23 @@ GameManager::GameManager() { ResetGame(); }
 
 void GameManager::ResetGame() {
   m_gameState = GameState();
+  // Initialize a default scenario with one shift and four time windows so
+  // UI code can safely read ThreatCenterState values without crashing.
   m_scenario = Scenario();
+  m_scenario.shifts.clear();
+  ShiftScenario shift;
+  shift.shiftNumber = 1;
+  // Create four windows (08:00,11:00,14:00,17:00)
+  for (int i = 0; i < 4; ++i) {
+    TimeWindow w;
+    // set time labels to match GameState window times
+    if (i == 0) w.timeLabel = "08:00";
+    else if (i == 1) w.timeLabel = "11:00";
+    else if (i == 2) w.timeLabel = "14:00";
+    else w.timeLabel = "17:00";
+    shift.windows.push_back(w);
+  }
+  m_scenario.shifts.push_back(shift);
 }
 
 GameState &GameManager::GetGameState() { return m_gameState; }

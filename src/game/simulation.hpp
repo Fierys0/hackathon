@@ -90,6 +90,9 @@ private:
      * @param gameManager Access to scenario, threat center, and game state
      */
     void EvaluateOutcomes(GameManager& gameManager);
+    void EvaluateFlood(GameState& gs, const ThreatCenterState& threat);
+    void EvaluateWildfire(GameState& gs, const ThreatCenterState& threat);
+    void EvaluateEarthquake(GameState& gs, const ThreatCenterState& threat);
 
     /**
      * Generate comms reports for the current window based on what changed

@@ -15,6 +15,12 @@ GameState::GameState()
       earlyWarningIssued(false),
       sheltersOpened(false) {}
 
+// Initialize the shiftStartingBudget to the configured starting budget
+// so UI can compute budget spent per shift without hardcoding values.
+// decisionLog remains empty until shifts complete.
+// Note: Keep constructor small; ResetForNewShift will set starting budget.
+
+
 const char *GameState::GetWindowDisplayTime(int windowIndex) {
   static constexpr const char *kWindowTimes[] = {"08:00", "11:00", "14:00", "17:00"};
 
@@ -36,6 +42,9 @@ void GameState::ResetForNewShift() {
   earlyWarningIssued = false;
   sheltersOpened = false;
   selectedActions.clear();
+
+  // Record the budget at the start of the shift so we can compute spent.
+  shiftStartingBudget = budget;
 }
 
 } // namespace Game

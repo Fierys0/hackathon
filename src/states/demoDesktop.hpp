@@ -3,6 +3,7 @@
 #include "fumbo.hpp"
 #include "raylib.h"
 #include <vector>
+#include "../game/game_manager.hpp"
 
 // DemoDesktop: Demo state showing OS simulation features
 
@@ -76,4 +77,6 @@ private:
 
   Fumbo::UI::Textbox m_notesTextbox;
   int m_notesWindowId;
+  // Backend game manager to expose live threat center data to the UI
+  Game::GameManager m_gameManager;
 };

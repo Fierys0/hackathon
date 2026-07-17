@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <string>
 
 namespace Game {
 
@@ -53,6 +54,22 @@ public:
   // Current window selection.
   // Stores the actions chosen for the active window.
   ActionList selectedActions;
+
+  // Shift summary entries recorded when a shift completes.
+  struct ShiftSummary {
+    int shiftNumber = 0;
+    float overallRating = 0.0f; // 0.0 - 5.0
+    int peopleSaved = 0;
+    int casualties = 0;
+    int budgetSpent = 0;
+    int publicTrust = 0;
+    std::vector<std::string> actionsTaken; // optional
+  };
+
+  std::vector<ShiftSummary> decisionLog;
+
+  // Budget snapshot at the start of the shift (used to compute spent)
+  int shiftStartingBudget;
 
   // Resets shift-scoped values while keeping campaign progression intact.
   void ResetForNewShift();
